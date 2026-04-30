@@ -1,0 +1,85 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║              GeM Filter Optimizer — Quick Setup Guide                       ║
+║              Version 3.0  |  Government e-Marketplace India                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FOLDER STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  gem-filter-optimizer/
+  │
+  ├── frontend/                   ← React web app (Vite)
+  │   ├── src/
+  │   │   ├── App.jsx             ← Main application component (entire UI)
+  │   │   ├── index.css           ← All styles
+  │   │   └── main.jsx            ← React DOM entry point
+  │   ├── index.html              ← HTML shell
+  │   ├── package.json            ← Node dependencies
+  │   └── vite.config.js          ← Vite dev server config
+  │
+  ├── backend/                    ← Python FastAPI server
+  │   ├── main.py                 ← API routes (/scrape, /analyze, /cache)
+  │   ├── scraper.py              ← requests + BeautifulSoup GeM scraper
+  │   ├── requirements.txt        ← Python dependencies
+  │   └── __init__.py
+  │
+  ├── docs/
+  │   └── GeM_Filter_Optimizer_Spec.docx   ← Full product specification
+  │
+  ├── .gitignore
+  └── SETUP.txt                   ← This file
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  • Node.js 18+       https://nodejs.org (LTS recommended)
+  • Python 3.11+      https://python.org/downloads
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  INSTALL & RUN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Terminal 1 — Backend:
+
+    cd backend
+    pip install -r requirements.txt
+    uvicorn main:app --reload --port 8000
+
+  Terminal 2 — Frontend:
+
+    cd frontend
+    npm install
+    npm run dev
+
+  Then open http://localhost:3000
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  HOW TO USE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Paste a GeM category search URL
+     (e.g. https://mkp.gem.gov.in/{category-slug}/search)
+  2. Click "Scrape →" — waits ~30s while it fetches products & specs
+  3. Enter your selling price
+  4. See the filter combinations where you rank L1 (cheapest)!
+
+  No login, no cookies, no browser automation needed.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  API ENDPOINTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  GET    /             Health check
+  POST   /scrape       Scrape a GeM URL → returns products + filters
+  POST   /analyze      Analyze filter opportunities
+  DELETE /cache        Clear the 30-min scrape cache
+
+  Swagger docs: http://localhost:8000/docs
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
