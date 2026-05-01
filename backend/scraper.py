@@ -7,6 +7,8 @@ import re
 import json
 import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs, urlencode, urldefrag
@@ -40,6 +42,28 @@ class GeMScraper:
     def __init__(self):
         self._session = requests.Session()
         self._session.headers.update(self.HEADERS)
+        
+        # Configure robust retry strategy for connection timeouts and server errors
+        retry_strategy = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET", "OPTIONS"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
+        
+        self._initialize_session()
+
+    def _initialize_session(self):
+        """Establish initial session cookies to prevent GeM from redirecting to homepage."""
+        try:
+            # Emulate browser visiting the homepage first to get JSESSIONID and cookies
+            self._session.get("https://mkp.gem.gov.in/", timeout=15)
+            time.sleep(0.5)
+        except Exception:
+            pass
 
     def __del__(self):
         try:
@@ -499,6 +523,13 @@ class GeMScraper:
             try:
                 resp = self._session.get(url, timeout=20, allow_redirects=True)
                 resp.raise_for_status()
+                
+                # Check if GeM redirected us to the homepage or login page due to missing session
+                if "mkp.gem.gov.in" in resp.url and (resp.url.strip("/") == "https://mkp.gem.gov.in" or "login" in resp.url.lower()):
+                    if attempt < retries - 1:
+                        self._initialize_session()
+                        continue
+                        
                 return resp.text
             except requests.RequestException as e:
                 last_err = e
