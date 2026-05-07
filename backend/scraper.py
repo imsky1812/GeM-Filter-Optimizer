@@ -33,6 +33,46 @@ class GeMScraper:
         "Cache-Control": "max-age=0",
     }
 
+    # All 36 Indian States and Union Territories (for location filtering)
+    INDIAN_STATES = [
+        "Andaman and Nicobar Islands",
+        "Andhra Pradesh",
+        "Arunachal Pradesh",
+        "Assam",
+        "Bihar",
+        "Chandigarh",
+        "Chhattisgarh",
+        "Dadra and Nagar Haveli and Daman and Diu",
+        "Delhi",
+        "Goa",
+        "Gujarat",
+        "Haryana",
+        "Himachal Pradesh",
+        "Jammu and Kashmir",
+        "Jharkhand",
+        "Karnataka",
+        "Kerala",
+        "Ladakh",
+        "Lakshadweep",
+        "Madhya Pradesh",
+        "Maharashtra",
+        "Manipur",
+        "Meghalaya",
+        "Mizoram",
+        "Nagaland",
+        "Odisha",
+        "Puducherry",
+        "Punjab",
+        "Rajasthan",
+        "Sikkim",
+        "Tamil Nadu",
+        "Telangana",
+        "Tripura",
+        "Uttar Pradesh",
+        "Uttarakhand",
+        "West Bengal",
+    ]
+
     # Configuration
     MAX_JSON_PAGES = 50          # Fetch up to 50 pages (600 products)
     MAX_ENRICH = 150             # Enrich up to 150 products with full specs
@@ -110,12 +150,12 @@ class GeMScraper:
 
         return clean_url, extra_params
 
-    def scrape(self, url: str) -> dict:
+    def scrape(self, url: str, location: str = "") -> dict:
         """
         Main entry point. Accepts either:
           - A product page URL (p-XXXXX-YYYYY-cat.html)
           - A category/search URL (including fragment-based query URLs)
-        Returns {filters, products, url, productCount, filterCount, yourProduct}
+        Returns {filters, products, url, productCount, filterCount, yourProduct, location}
         """
         url = url.strip()
         your_product = None
@@ -140,10 +180,11 @@ class GeMScraper:
                     "productCount": 0,
                     "filterCount": 0,
                     "yourProduct": your_product,
+                    "location": location or "All India",
                     "error": "Could not determine the category listing. Try using a category search URL instead.",
                 }
 
-        result = self._scrape_category_listing(url, extra_params)
+        result = self._scrape_category_listing(url, extra_params, location)
         result["yourProduct"] = your_product
         return result
 
@@ -236,11 +277,12 @@ class GeMScraper:
 
     # ── CATEGORY LISTING (JSON API) ──────────────────────────────────────────
 
-    def _scrape_category_listing(self, url: str, extra_params: dict = None) -> dict:
+    def _scrape_category_listing(self, url: str, extra_params: dict = None, location: str = "") -> dict:
         """
         Scrape a GeM category listing page using the JSON API.
         Fetches ALL pages to get every product in the category.
         extra_params: additional query params extracted from fragment-based URLs.
+        location: optional Indian state name to filter by seller registered address.
         """
         base_url = url.split("#")[0].split("?")[0]
         if not base_url.endswith("/search"):
@@ -253,6 +295,10 @@ class GeMScraper:
                         if k.lower() not in ("page", "format")}
             if filtered:
                 extra_qs = "&" + urlencode(filtered)
+
+        # Append location filter if a specific state is selected
+        if location and location.lower() not in ("", "all india", "all"):
+            extra_qs += "&localized_search=" + requests.utils.quote(location)
 
         all_products = []
         facet_defs = []
@@ -329,6 +375,7 @@ class GeMScraper:
             "productCount": len(all_products),
             "filterCount": len(all_filters),
             "totalResults": total_results,
+            "location": location or "All India",
         }
 
     def _build_product_url(self, catalog: dict) -> str:
@@ -360,13 +407,20 @@ class GeMScraper:
         for facet in admin_facets:
             name = facet.get("name", "")
             code = facet.get("code", "")
-            if name in ("Make in India", "Lead Time for Dispatch"):
+            
+            is_golden = False
+            name_lower = name.lower()
+            if "make in india" in name_lower or "mse" in name_lower or "startup" in name_lower or "pac" in name_lower:
+                is_golden = True
+
+            if is_golden or name in ("Make in India", "Lead Time for Dispatch"):
                 defs.append({
                     "filterName": name,
                     "filterKey": code,
-                    "isGolden": False,
+                    "isGolden": is_golden,
                     "type": facet.get("type", ""),
                 })
+
 
         return defs
 

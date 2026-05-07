@@ -14,15 +14,15 @@ function findL1Opportunities(products, sellerPrice, filters) {
   for (let i = 0; i < filters.length; i++) {
     const f1 = filters[i];
     for (const v1 of f1.values) {
-      combos.push([{ key: f1.filterKey, name: f1.filterName, value: v1 }]);
+      combos.push([{ key: f1.filterKey, name: f1.filterName, value: v1, isGolden: f1.isGolden }]);
     }
     for (let j = i + 1; j < filters.length; j++) {
       const f2 = filters[j];
       for (const v1 of f1.values) {
         for (const v2 of f2.values) {
           combos.push([
-            { key: f1.filterKey, name: f1.filterName, value: v1 },
-            { key: f2.filterKey, name: f2.filterName, value: v2 },
+            { key: f1.filterKey, name: f1.filterName, value: v1, isGolden: f1.isGolden },
+            { key: f2.filterKey, name: f2.filterName, value: v2, isGolden: f2.isGolden },
           ]);
         }
       }
@@ -50,9 +50,12 @@ function findL1Opportunities(products, sellerPrice, filters) {
     const gapScore = isUntapped ? 100 : Math.min(priceGap / maxGap, 1) * 100;
     const scarcityScore = Math.max(1 - matching.length / 10, 0) * 100;
     const trafficScore = isUntapped ? 80 : Math.min(matching.length / 5, 1) * 100;
-    const score = isUntapped ? 100 : Math.round(
-      gapScore * 0.5 + scarcityScore * 0.3 + trafficScore * 0.2
-    );
+    const hasGolden = combo.some((c) => c.isGolden);
+    
+    // Severely penalize score if combo does NOT include any Golden filters,
+    // because GeM calculates L1 strictly based on Golden parameters.
+    const rawScore = gapScore * 0.5 + scarcityScore * 0.3 + trafficScore * 0.2;
+    const score = isUntapped ? 100 : Math.round(hasGolden ? rawScore : rawScore * 0.3);
 
     const competitors = matching.sort((a, b) => a.price - b.price).slice(0, 3);
 
@@ -66,7 +69,8 @@ function findL1Opportunities(products, sellerPrice, filters) {
       score,
       isSingle: combo.length === 1,
       competitors,
-      isUntapped
+      isUntapped,
+      hasGolden
     });
   }
 
@@ -124,7 +128,8 @@ function OpportunityCard({ r, rank }) {
         <div className="win-card-body">
           <div className="win-filters">
             {r.combo.map((c, i) => (
-              <span key={i} className="filter-chip">
+              <span key={i} className={`filter-chip ${c.isGolden ? 'filter-chip-golden' : ''}`}>
+                {c.isGolden && <span className="golden-dot">★</span>}
                 {c.name}: <strong>{c.value}</strong>
               </span>
             ))}
@@ -157,6 +162,17 @@ function OpportunityCard({ r, rank }) {
       </div>
       {open && (
         <div className="win-detail">
+          {!r.hasGolden && (
+            <div className="warn-box" style={{ marginBottom: "1rem" }}>
+              <span style={{ fontSize: "1rem", marginRight: "6px" }}>⚠</span>
+              <span>
+                <strong>Warning:</strong> This combination uses only normal filters.
+                On GeM, changing normal filters <strong>does NOT</strong> change who gets the L1 position.
+                L1 is determined strictly by Golden Parameters and Make in India/MSE status.
+                Use combinations with Golden Filters to guarantee L1.
+              </span>
+            </div>
+          )}
           <div className="detail-cols">
             <div>
               <div className="detail-section-title">Price Ranking</div>
@@ -284,7 +300,21 @@ export default function App() {
   const [scrapeError, setScrapeError] = useState("");
   const [results, setResults] = useState(null);
   const [activeTab, setActiveTab] = useState("single");
+  const [locations, setLocations] = useState(["All India"]);
+  const [selectedLocation, setSelectedLocation] = useState("All India");
   const analyzeTimerRef = useRef(null);
+
+  // Fetch locations on mount
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/locations`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.locations) {
+          setLocations(data.locations);
+        }
+      })
+      .catch((err) => console.error("Failed to load locations", err));
+  }, []);
 
   const priceNum = parseInt(sellerPrice) || 0;
 
@@ -336,7 +366,7 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/scrape`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: normalizedUrl }),
+        body: JSON.stringify({ url: normalizedUrl, location: selectedLocation }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -408,6 +438,19 @@ export default function App() {
             onKeyDown={(e) => e.key === "Enter" && handleScrape()}
             id="gem-url-input"
           />
+          <div className="location-select-wrap">
+            <select 
+              value={selectedLocation} 
+              onChange={(e) => setSelectedLocation(e.target.value)}
+              className="location-select"
+              title="Filter by Seller Delivery Location"
+            >
+              {locations.map((loc, i) => (
+                <option key={i} value={loc}>{loc}</option>
+              ))}
+            </select>
+            <span className="select-arrow">▼</span>
+          </div>
           <button
             className="btn btn-primary"
             onClick={handleScrape}
@@ -440,6 +483,9 @@ export default function App() {
             ✓ Loaded{" "}
             <strong>{scrapedData.products.length} products</strong> with{" "}
             <strong>{scrapedData.filters.length} filters</strong>
+            {scrapedData.location && scrapedData.location !== "All India" && (
+              <span className="loc-badge">📍 {scrapedData.location}</span>
+            )}
             {scrapedData.totalResults > scrapedData.productCount && (
               <span>
                 {" "}
