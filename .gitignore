@@ -32,3 +32,8 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Scratch / temp files
+scratch.*
+gem_data.json
+script.txt
