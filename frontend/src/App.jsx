@@ -5,6 +5,59 @@ import "./index.css";
 const BACKEND_URL = "http://localhost:8000";
 
 // ─── ANALYSIS ENGINE ──────────────────────────────────────────────────────────
+
+// Dynamically reconstruct GeM's internal taxonomy dependencies
+function detectDependencies(products, filters) {
+  const rules = [];
+  if (!products || products.length < 5) return rules;
+
+  for (let i = 0; i < filters.length; i++) {
+    for (let j = 0; j < filters.length; j++) {
+      if (i === j) continue;
+      
+      const f1 = filters[i];
+      const f2 = filters[j];
+      const observations = {};
+      let totalObserved = 0;
+      
+      for (const p of products) {
+        const v1 = String(p.specs[f1.filterKey] || "").toLowerCase();
+        const v2 = String(p.specs[f2.filterKey] || "").toLowerCase();
+        
+        if (v1 && v2) {
+          if (!observations[v1]) observations[v1] = new Set();
+          observations[v1].add(v2);
+          totalObserved++;
+        }
+      }
+      
+      // Need enough representative data to infer a hard taxonomy rule
+      if (totalObserved < 10) continue; 
+
+      let strictlyDetermines = true;
+      for (const v2Set of Object.values(observations)) {
+        if (v2Set.size > 1) {
+          strictlyDetermines = false;
+          break;
+        }
+      }
+      
+      if (strictlyDetermines) {
+        const mapping = {};
+        for (const [v1, v2Set] of Object.entries(observations)) {
+          mapping[v1] = Array.from(v2Set)[0];
+        }
+        rules.push({
+          detKey: f1.filterKey,
+          depKey: f2.filterKey,
+          mapping: mapping
+        });
+      }
+    }
+  }
+  return rules;
+}
+
 // Find all filter combinations where seller's price is the lowest (L1)
 function findL1Opportunities(products, sellerPrice, filters) {
   const results = [];
@@ -29,9 +82,36 @@ function findL1Opportunities(products, sellerPrice, filters) {
     }
   }
 
-  const maxGap = sellerPrice * 0.8 || 1;
+  const rules = detectDependencies(products, filters);
+  const validCombos = [];
 
   for (const combo of combos) {
+    let isContradictory = false;
+    for (let i = 0; i < combo.length; i++) {
+      for (let j = 0; j < combo.length; j++) {
+        if (i === j) continue;
+        const c1 = combo[i];
+        const c2 = combo[j];
+        
+        const rule = rules.find(r => r.detKey === c1.key && r.depKey === c2.key);
+        if (rule) {
+          const expectedV2 = rule.mapping[c1.value.toLowerCase()];
+          if (expectedV2 && expectedV2 !== c2.value.toLowerCase()) {
+            isContradictory = true;
+            break;
+          }
+        }
+      }
+      if (isContradictory) break;
+    }
+    if (!isContradictory) {
+      validCombos.push(combo);
+    }
+  }
+
+  const maxGap = sellerPrice * 0.8 || 1;
+
+  for (const combo of validCombos) {
     // Find products matching this filter combo
     const matching = products.filter((p) =>
       combo.every(
@@ -127,12 +207,15 @@ function OpportunityCard({ r, rank }) {
         <span className="win-rank win-rank-ready">L1</span>
         <div className="win-card-body">
           <div className="win-filters">
-            {r.combo.map((c, i) => (
-              <span key={i} className={`filter-chip ${c.isGolden ? 'filter-chip-golden' : ''}`}>
-                {c.isGolden && <span className="golden-dot">★</span>}
-                {c.name}: <strong>{c.value}</strong>
-              </span>
-            ))}
+            {r.combo.map((c, i) => {
+              const filterName = c.name || c.filterName || c.filterKey || "Filter";
+              return (
+                <span key={i} className={`filter-chip ${c.isGolden ? 'filter-chip-golden' : ''}`}>
+                  {c.isGolden && <span className="golden-dot">★</span>}
+                  <span className="filter-chip-name">{filterName}</span>: <strong>{c.value}</strong>
+                </span>
+              );
+            })}
           </div>
           <div className="win-meta">
             <span>
@@ -258,15 +341,18 @@ function OpportunityCard({ r, rank }) {
                     Click <strong>Edit Listing</strong> on your product
                   </span>
                 </div>
-                {r.combo.map((c, i) => (
-                  <div className="step-item" key={i}>
-                    <span className="step-icon si-set">✓</span>
-                    <span className="step-text">
-                      Set <strong>"{c.name}"</strong> to{" "}
-                      <strong>"{c.value}"</strong>
-                    </span>
-                  </div>
-                ))}
+                {r.combo.map((c, i) => {
+                  const filterName = c.name || c.filterName || c.filterKey || "Filter";
+                  return (
+                    <div className="step-item" key={i}>
+                      <span className="step-icon si-set">✓</span>
+                      <span className="step-text">
+                        Set <strong>"{filterName}"</strong> to{" "}
+                        <strong>"{c.value}"</strong>
+                      </span>
+                    </div>
+                  );
+                })}
                 <div className="step-item">
                   <span className="step-icon si-info">→</span>
                   <span className="step-text">
@@ -303,6 +389,11 @@ export default function App() {
   const [locations, setLocations] = useState(["All India"]);
   const [selectedLocation, setSelectedLocation] = useState("All India");
   const analyzeTimerRef = useRef(null);
+
+  // Deep Search state
+  const [deepStatus, setDeepStatus] = useState("idle"); // idle | loading | done | error
+  const [deepResults, setDeepResults] = useState(null);
+  const [deepError, setDeepError] = useState("");
 
   // Fetch locations on mount
   useEffect(() => {
@@ -354,6 +445,10 @@ export default function App() {
     setScrapeError("");
     setScrapedData(null);
     setResults(null);
+    // Reset deep search when re-scraping
+    setDeepStatus("idle");
+    setDeepResults(null);
+    setDeepError("");
 
     // Auto-prepend https:// if user didn't include a protocol
     let normalizedUrl = gemUrl.trim();
@@ -382,6 +477,46 @@ export default function App() {
     } catch (e) {
       setScrapeError(e.message || "Failed to scrape");
       setScrapeStatus("error");
+    }
+  };
+
+  const handleDeepSearch = async () => {
+    if (!gemUrl.trim() || !priceNum) return;
+    setDeepStatus("loading");
+    setDeepResults(null);
+    setDeepError("");
+    setActiveTab("deep");
+
+    let normalizedUrl = gemUrl.trim();
+    if (!normalizedUrl.startsWith("http://") && !normalizedUrl.startsWith("https://")) {
+      normalizedUrl = "https://" + normalizedUrl;
+    }
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/find-l1`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: normalizedUrl,
+          seller_price: priceNum,
+          location: selectedLocation,
+          max_depth: 5,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(
+          typeof err.detail === "object"
+            ? err.detail.message
+            : err.detail || "Deep search failed"
+        );
+      }
+      const data = await res.json();
+      setDeepResults(data);
+      setDeepStatus("done");
+    } catch (e) {
+      setDeepError(e.message || "Deep search failed");
+      setDeepStatus("error");
     }
   };
 
@@ -629,6 +764,13 @@ export default function App() {
               >
                 📊 Chart
               </button>
+              <button
+                className={`tab tab-deep ${activeTab === "deep" ? "on" : ""}`}
+                onClick={() => setActiveTab("deep")}
+                id="deep-search-tab"
+              >
+                🔍 Deep Search
+              </button>
             </div>
 
             {activeTab === "single" &&
@@ -674,7 +816,7 @@ export default function App() {
                       marginBottom: "1rem",
                     }}
                   >
-                    Set <strong>both</strong> filter values together for
+                    Set <strong>all</strong> filter values together for
                     these L1 niches:
                   </div>
                   {results.combos.slice(0, 100).map((r, i) => (
@@ -694,6 +836,151 @@ export default function App() {
                   )}
                 </>
               ))}
+
+            {activeTab === "deep" && (
+              <div className="deep-search-panel">
+                {deepStatus === "idle" && (
+                  <div className="deep-search-intro">
+                    <div className="deep-icon">🔍</div>
+                    <div className="deep-title">Cascading Golden Filter Search</div>
+                    <div className="deep-desc">
+                      Deep Search re-scrapes GeM <strong>live</strong> after each golden filter is applied,
+                      then picks the <em>next available</em> golden filter from the narrowed result —
+                      repeating up to <strong>5 levels</strong> until your price becomes L1.
+                      This finds combinations of <strong>3, 4, or 5 golden filters</strong> that
+                      static analysis misses.
+                    </div>
+                    <div className="deep-warning">
+                      ⏱ This may take <strong>1–3 minutes</strong> depending on category size.
+                    </div>
+                    <button
+                      className="btn btn-deep"
+                      onClick={handleDeepSearch}
+                      disabled={!priceNum || scrapeStatus !== "done"}
+                      id="deep-search-btn"
+                    >
+                      🔍 Start Deep Search
+                    </button>
+                  </div>
+                )}
+
+                {deepStatus === "loading" && (
+                  <div className="deep-loading">
+                    <span className="spin spin-amber" />
+                    <div className="deep-loading-title">Deep Search Running...</div>
+                    <div className="deep-loading-sub">
+                      Re-scraping GeM with cascading golden filters.
+                      This may take 1–3 minutes.
+                    </div>
+                    <div className="deep-progress-bar">
+                      <div className="deep-progress-fill" />
+                    </div>
+                    <div style={{ fontSize: ".68rem", color: "var(--text4)", marginTop: ".5rem" }}>
+                      Exploring depth 1 → 2 → 3 → 4 → 5 golden filter combinations...
+                    </div>
+                  </div>
+                )}
+
+                {deepStatus === "error" && (
+                  <div className="err-box" style={{ marginTop: "1rem" }}>
+                    {deepError}
+                    <button
+                      className="btn btn-deep"
+                      onClick={handleDeepSearch}
+                      style={{ marginTop: "1rem" }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {deepStatus === "done" && deepResults && (
+                  <>
+                    <div className="deep-summary-row">
+                      <div className="deep-stat">
+                        <div className="deep-stat-val">{deepResults.combinations?.length ?? 0}</div>
+                        <div className="deep-stat-lbl">L1 Combos Found</div>
+                      </div>
+                      <div className="deep-stat">
+                        <div className="deep-stat-val">{deepResults.totalScraped ?? 0}</div>
+                        <div className="deep-stat-lbl">Re-Scrapes Done</div>
+                      </div>
+                      <div className="deep-stat">
+                        <div className="deep-stat-val">{deepResults.goldenFilterCount ?? 0}</div>
+                        <div className="deep-stat-lbl">Golden Filters</div>
+                      </div>
+                      {deepResults.truncated && (
+                        <div className="deep-stat deep-stat-warn">
+                          <div className="deep-stat-val">⚡</div>
+                          <div className="deep-stat-lbl">Search capped at 120 calls</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {deepResults.combinations?.length === 0 ? (
+                      <div className="empty" style={{ marginTop: "1rem" }}>
+                        <div className="empty-icon">🔍</div>
+                        <div className="empty-text">
+                          No L1 niches found even with cascading golden filters.<br />
+                          <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
+                            Try lowering your price.
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: ".72rem", color: "var(--text3)", marginBottom: "1rem" }}>
+                          Found <strong>{deepResults.combinations.length}</strong> L1 winning combinations
+                          via live re-scraping — sorted by opportunity score:
+                        </div>
+                        {/* Group by depth */}
+                        {[...new Set(deepResults.combinations.map(c => c.depth))].sort().map(depth => {
+                          const group = deepResults.combinations.filter(c => c.depth === depth);
+                          return (
+                            <div key={depth} className="depth-group">
+                              <div className="depth-group-hdr">
+                                <span className="depth-badge">Depth {depth}</span>
+                                <span className="depth-badge-sub">
+                                  {depth} golden filter{depth > 1 ? "s" : ""} applied — {group.length} win{group.length !== 1 ? "s" : ""}
+                                </span>
+                              </div>
+                              {group.map((r, i) => (
+                                <OpportunityCard key={i} r={r} rank={i + 1} />
+                              ))}
+                            </div>
+                          );
+                        })}
+
+                        {/* Progress log toggle */}
+                        <details className="progress-log-details">
+                          <summary>View search log ({deepResults.progress?.length ?? 0} entries)</summary>
+                          <div className="progress-log">
+                            {(deepResults.progress ?? []).map((line, i) => (
+                              <div key={i} className={`log-line ${
+                                line.includes("✅") ? "log-win" :
+                                line.includes("Error") ? "log-err" :
+                                line.includes("[Done]") ? "log-done" :
+                                line.includes("deeper") ? "log-deeper" : ""
+                              }`}>
+                                {line}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+
+                        <button
+                          className="btn btn-deep"
+                          onClick={handleDeepSearch}
+                          style={{ marginTop: "1.5rem" }}
+                        >
+                          🔄 Re-run Deep Search
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             {activeTab === "chart" && (
               <>
@@ -794,10 +1081,21 @@ export default function App() {
               <strong>₹{minCatPrice.toLocaleString()}</strong>.
               <br />
               <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
-                Lower your price below the cheapest competitor in a filter
-                niche.
+                Lower your price below the cheapest competitor in a filter niche.
               </span>
             </div>
+            <button
+              className="btn btn-deep"
+              style={{ marginTop: "1.5rem" }}
+              onClick={() => {
+                setActiveTab("deep");
+                handleDeepSearch();
+              }}
+              disabled={deepStatus === "loading"}
+              id="try-deep-search-btn"
+            >
+              🔍 Try Deep Search — find 3+ golden filter combos
+            </button>
           </div>
         </div>
       )}

@@ -12,7 +12,7 @@ import hashlib
 import time
 
 
-app = FastAPI(title="GeM Filter Optimizer API", version="3.0.0")
+app = FastAPI(title="GeM Filter Optimizer API", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +37,12 @@ class AnalyzeRequest(BaseModel):
     filters: list
     seller_price: int
     seller_specs: dict
+
+class FindL1Request(BaseModel):
+    url: str
+    seller_price: int
+    location: Optional[str] = ""
+    max_depth: Optional[int] = 5
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -123,7 +129,96 @@ def clear_cache():
     return {"cleared": True}
 
 
+@app.post("/find-l1")
+def find_l1(req: FindL1Request):
+    """
+    Cascading golden filter deep search.
+    Re-scrapes the GeM API after each golden filter is applied to find
+    the next available golden filters in the narrowed niche, repeating
+    until the seller's price becomes L1 or max_depth is reached.
+    Supports 3+ golden filter combinations.
+    """
+    if req.seller_price <= 0:
+        raise HTTPException(status_code=400, detail="seller_price must be > 0.")
+
+    url = req.url.strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+
+    from urllib.parse import urlparse as _urlparse
+    gem_hosts = ["gem.gov.in", "mkp.gem.gov.in", "mkp.gemorion.org"]
+    parsed_host = _urlparse(url).hostname or ""
+    if not any(parsed_host == h or parsed_host.endswith("." + h) for h in gem_hosts):
+        raise HTTPException(
+            status_code=400,
+            detail="URL must be a GeM portal page (gem.gov.in or mkp.gem.gov.in).",
+        )
+
+    max_depth = max(1, min(req.max_depth or 5, 8))  # clamp 1-8
+
+    try:
+        result = GeMScraper().find_l1_combinations(
+            url=url,
+            seller_price=req.seller_price,
+            location=req.location or "",
+            max_depth=max_depth,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Deep search failed: {e}")
+
+    if result.get("error"):
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    return result
+
+
 # ── Core analysis engine ──────────────────────────────────────────────────────
+
+def _detect_dependencies(products: list, filters: list) -> list:
+    """
+    Dynamically reconstruct GeM's internal taxonomy dependencies.
+    """
+    rules = []
+    if not products or len(products) < 5:
+        return rules
+
+    for i, f1 in enumerate(filters):
+        for j, f2 in enumerate(filters):
+            if i == j:
+                continue
+                
+            observations = {}
+            total_observed = 0
+            
+            for p in products:
+                specs = p.get("specs", {})
+                v1 = str(specs.get(f1["filterKey"], "")).strip().lower()
+                v2 = str(specs.get(f2["filterKey"], "")).strip().lower()
+                
+                if v1 and v2:
+                    if v1 not in observations:
+                        observations[v1] = set()
+                    observations[v1].add(v2)
+                    total_observed += 1
+                    
+            if total_observed < 10:
+                continue
+                
+            strictly_determines = True
+            for v2_set in observations.values():
+                if len(v2_set) > 1:
+                    strictly_determines = False
+                    break
+                    
+            if strictly_determines:
+                mapping = {v1: list(v2_set)[0] for v1, v2_set in observations.items()}
+                rules.append({
+                    "detKey": f1["filterKey"],
+                    "depKey": f2["filterKey"],
+                    "mapping": mapping
+                })
+                
+    return rules
 
 def _analyze(products: list, seller_price: int, seller_specs: dict, filters: list) -> list:
     """
@@ -142,10 +237,32 @@ def _analyze(products: list, seller_price: int, seller_specs: dict, filters: lis
                         {"key": f2["filterKey"], "name": f2["filterName"], "value": v2, "isGolden": f2.get("isGolden", False)},
                     ])
 
+    rules = _detect_dependencies(products, filters)
+    valid_combos = []
+    
+    for combo in combos:
+        is_contradictory = False
+        for i, c1 in enumerate(combo):
+            for j, c2 in enumerate(combo):
+                if i == j:
+                    continue
+                
+                rule = next((r for r in rules if r["detKey"] == c1["key"] and r["depKey"] == c2["key"]), None)
+                if rule:
+                    expected_v2 = rule["mapping"].get(str(c1["value"]).lower())
+                    if expected_v2 and expected_v2 != str(c2["value"]).lower():
+                        is_contradictory = True
+                        break
+            if is_contradictory:
+                break
+                
+        if not is_contradictory:
+            valid_combos.append(combo)
+
     results = []
     max_gap = seller_price * 0.8 or 1
 
-    for combo in combos:
+    for combo in valid_combos:
         matching = [
             p for p in products
             if all(str(p["specs"].get(c["key"], "")).lower() == c["value"].lower() for c in combo)

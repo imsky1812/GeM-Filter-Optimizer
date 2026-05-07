@@ -74,10 +74,12 @@ class GeMScraper:
     ]
 
     # Configuration
-    MAX_JSON_PAGES = 50          # Fetch up to 50 pages (600 products)
-    MAX_ENRICH = 150             # Enrich up to 150 products with full specs
-    ENRICH_WORKERS = 10          # Parallel workers for spec fetching
+    MAX_JSON_PAGES = 500          # Fetch up to 500 pages (all products)
+    MAX_ENRICH = 1000            # Enrich up to 1000 products with full specs
+    ENRICH_WORKERS = 20          # Parallel workers for spec fetching
     MAX_FILTERS = 15             # Max filters to return
+    MAX_COMBO_DEPTH = 5          # Explore golden filter combos up to 5 levels deep
+    MAX_API_CALLS = 120          # Safety ceiling: stop exploration after this many re-scrapes
 
     def __init__(self):
         self._session = requests.Session()
@@ -187,6 +189,270 @@ class GeMScraper:
         result = self._scrape_category_listing(url, extra_params, location)
         result["yourProduct"] = your_product
         return result
+
+    def scrape_with_filters(self, url: str, selected_filters: list, location: str = "") -> dict:
+        """
+        Re-scrape a category listing with specific golden filters applied.
+        selected_filters: [{"filterKey": "code", "value": "Yes"}, ...]
+        GeM's JSON API supports facet params like &facet_code=value.
+        Returns the same structure as scrape() but with filtered results.
+        """
+        url = url.strip()
+        url, extra_params = self._normalize_url(url)
+
+        # Merge selected filters into extra_params
+        if extra_params is None:
+            extra_params = {}
+        for sf in selected_filters:
+            extra_params[sf["filterKey"]] = sf["value"]
+
+        result = self._scrape_category_listing(url, extra_params, location)
+        result["appliedFilters"] = selected_filters
+        return result
+
+    def find_l1_combinations(self, url: str, seller_price: int, location: str = "", max_depth: int = None, max_api_calls: int = None) -> dict:
+        """
+        Cascading re-scrape engine: iteratively applies golden filters and re-scrapes
+        the GeM API after each one to find the next available golden filter options,
+        repeating until the seller's price becomes L1 in the narrowed niche.
+
+        Algorithm:
+        1. Scrape unfiltered listing → collect all golden filters
+        2. For each golden filter value → re-scrape WITH that filter applied
+        3. From the narrowed result, pick next available golden filter → re-scrape again
+        4. Repeat up to max_depth levels; record every L1 win found along the way
+        5. Stop early if max_api_calls safety ceiling is reached
+
+        Returns {combinations, totalScraped, progress, truncated, baseProductCount, ...}
+        """
+        if max_depth is None:
+            max_depth = self.MAX_COMBO_DEPTH
+        if max_api_calls is None:
+            max_api_calls = self.MAX_API_CALLS
+
+        url = url.strip()
+        url, base_extra_params = self._normalize_url(url)
+
+        combinations = []  # Valid L1 combos found
+        progress_log = []  # Progress messages
+        total_scraped = 0  # Total re-scrape API calls made
+        seen_combos = set()  # Dedup combo signatures
+        truncated = False  # True if we hit the API call ceiling
+
+        # ── Step 1: Initial unfiltered scrape ────────────────────────────────
+        progress_log.append("[Step 1] Scraping unfiltered category listing...")
+        base_result = self._scrape_category_listing(url, base_extra_params, location)
+        total_scraped += 1
+
+        if not base_result.get("products"):
+            return {
+                "combinations": [],
+                "totalScraped": total_scraped,
+                "progress": progress_log,
+                "baseProductCount": 0,
+                "truncated": False,
+                "error": "No products found in base listing.",
+            }
+
+        base_products = base_result["products"]
+        base_filters = base_result["filters"]
+        golden_filters = [f for f in base_filters if f.get("isGolden", False)]
+
+        progress_log.append(
+            f"[Step 1] Found {len(base_products)} products, "
+            f"{len(golden_filters)} golden filters available."
+        )
+
+        if not golden_filters:
+            progress_log.append("[Step 1] No golden filters found — cannot cascade.")
+            return {
+                "combinations": [],
+                "totalScraped": total_scraped,
+                "progress": progress_log,
+                "baseProductCount": len(base_products),
+                "truncated": False,
+                "goldenFilterCount": 0,
+            }
+
+        # ── Recursive cascading explorer ──────────────────────────────────────
+        def explore(applied_filters: list, current_filters: list, depth: int):
+            """Recursively apply each available golden filter, re-scrape, and recurse."""
+            nonlocal total_scraped, truncated
+
+            if depth > max_depth:
+                return
+
+            if total_scraped >= max_api_calls:
+                if not truncated:
+                    truncated = True
+                    progress_log.append(
+                        f"[Safety] Reached {max_api_calls} API calls — stopping exploration early."
+                    )
+                return
+
+            # Only consider golden filters at each depth level
+            available_golden = [
+                f for f in current_filters
+                if f.get("isGolden", False)
+                and f["filterKey"] not in {af["filterKey"] for af in applied_filters}
+            ]
+
+            if not available_golden:
+                progress_log.append(
+                    f"[Depth {depth}] No more golden filters available in this narrowed set."
+                )
+                return
+
+            for gf in available_golden:
+                if total_scraped >= max_api_calls:
+                    truncated = True
+                    return
+
+                for val in gf.get("values", []):
+                    if total_scraped >= max_api_calls:
+                        truncated = True
+                        return
+
+                    new_filter = {
+                        "filterKey": gf["filterKey"],
+                        "filterName": gf["filterName"],
+                        "value": val,
+                        "isGolden": True,
+                    }
+                    new_applied = applied_filters + [new_filter]
+
+                    # Dedup: canonical sorted signature
+                    sig = tuple(sorted((f["filterKey"], f["value"]) for f in new_applied))
+                    if sig in seen_combos:
+                        continue
+                    seen_combos.add(sig)
+
+                    # ── Re-scrape with all applied filters ────────────────
+                    combo_label = " + ".join(
+                        f'{f["filterName"]}: {f["value"]}' for f in new_applied
+                    )
+                    progress_log.append(f"[Depth {depth}] Re-scraping → {combo_label}")
+
+                    try:
+                        extra = dict(base_extra_params) if base_extra_params else {}
+                        for af in new_applied:
+                            extra[af["filterKey"]] = af["value"]
+
+                        filtered_result = self._scrape_category_listing(url, extra, location)
+                        total_scraped += 1
+
+                        filtered_products = filtered_result.get("products", [])
+                        filtered_filters = filtered_result.get("filters", [])
+
+                        # ── Untapped niche (no competitors at all) ────────
+                        if not filtered_products:
+                            combinations.append({
+                                "combo": new_applied,
+                                "label": combo_label,
+                                "competitorCount": 0,
+                                "minCompetitorPrice": None,
+                                "sellerPrice": seller_price,
+                                "priceGap": 0,
+                                "isUntapped": True,
+                                "hasGolden": True,
+                                "status": "WIN",
+                                "competitors": [],
+                                "depth": depth,
+                                "totalInNiche": filtered_result.get("totalResults", 0),
+                            })
+                            progress_log.append(
+                                f"  → ✅ UNTAPPED NICHE (depth {depth}) — no competitors!"
+                            )
+                            # Don't go deeper — already a guaranteed win
+                            continue
+
+                        min_comp_price = min(p["price"] for p in filtered_products)
+                        is_l1 = seller_price < min_comp_price
+
+                        if is_l1:
+                            # ── L1 Win ───────────────────────────────────
+                            price_gap = min_comp_price - seller_price
+                            competitors = sorted(filtered_products, key=lambda p: p["price"])[:5]
+                            combinations.append({
+                                "combo": new_applied,
+                                "label": combo_label,
+                                "competitorCount": len(filtered_products),
+                                "minCompetitorPrice": min_comp_price,
+                                "sellerPrice": seller_price,
+                                "priceGap": price_gap,
+                                "isUntapped": False,
+                                "hasGolden": True,
+                                "status": "WIN",
+                                "competitors": competitors,
+                                "depth": depth,
+                                "totalInNiche": filtered_result.get("totalResults", 0),
+                            })
+                            progress_log.append(
+                                f"  → ✅ L1 WIN (depth {depth})! "
+                                f"Gap ₹{price_gap:,} vs {len(filtered_products)} competitors."
+                            )
+                            # Continue deeper: adding more golden filters may find
+                            # even stronger / more specific niches
+                            if depth < max_depth and filtered_filters:
+                                explore(new_applied, filtered_filters, depth + 1)
+
+                        else:
+                            # ── Not L1 yet — go deeper to narrow the niche ──
+                            progress_log.append(
+                                f"  → Not L1 yet (cheapest ₹{min_comp_price:,}, "
+                                f"yours ₹{seller_price:,}) — going deeper..."
+                            )
+                            if depth < max_depth and filtered_filters:
+                                explore(new_applied, filtered_filters, depth + 1)
+
+                    except Exception as e:
+                        progress_log.append(f"  → Error: {str(e)[:120]}")
+                        continue
+
+        # ── Start exploration from depth 1 ────────────────────────────────────
+        progress_log.append(f"[Step 2] Starting cascading golden filter exploration (max depth {max_depth})...")
+        explore([], base_filters, 1)
+
+        # ── Score and rank combinations ───────────────────────────────────────
+        for combo in combinations:
+            if combo["isUntapped"]:
+                combo["score"] = 100
+            else:
+                max_gap = max(seller_price * 0.8, 1)
+                gap_score = min(combo["priceGap"] / max_gap, 1) * 100
+                scarcity_score = max(1 - combo["competitorCount"] / 10, 0) * 100
+                # Reward deeper combos slightly (more specific = more defensible niche)
+                depth_bonus = min(combo["depth"] * 5, 20)
+                combo["score"] = round(gap_score * 0.55 + scarcity_score * 0.35 + depth_bonus * 0.1)
+
+        combinations.sort(key=lambda c: (c["score"], c["depth"]), reverse=True)
+
+        summary = (
+            f"[Done] Found {len(combinations)} L1 combinations "
+            f"across {total_scraped} re-scrapes"
+        )
+        if truncated:
+            summary += f" (search stopped early at {max_api_calls} API calls)."
+        else:
+            summary += "."
+        progress_log.append(summary)
+
+        return {
+            "combinations": combinations,
+            "totalScraped": total_scraped,
+            "progress": progress_log,
+            "truncated": truncated,
+            "baseProductCount": len(base_products),
+            "goldenFilterCount": len(golden_filters),
+            "goldenFilters": [
+                {
+                    "filterName": gf["filterName"],
+                    "filterKey": gf["filterKey"],
+                    "values": gf["values"],
+                }
+                for gf in golden_filters
+            ],
+        }
 
     # ── PRODUCT DETAIL PAGE ───────────────────────────────────────────────────
 
