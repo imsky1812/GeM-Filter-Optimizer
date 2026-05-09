@@ -500,7 +500,7 @@ export default function App() {
           url: normalizedUrl,
           seller_price: priceNum,
           location: selectedLocation,
-          max_depth: 5,
+          max_depth: 10,
         }),
       });
       if (!res.ok) {
@@ -846,8 +846,8 @@ export default function App() {
                     <div className="deep-desc">
                       Deep Search re-scrapes GeM <strong>live</strong> after each golden filter is applied,
                       then picks the <em>next available</em> golden filter from the narrowed result —
-                      repeating up to <strong>5 levels</strong> until your price becomes L1.
-                      This finds combinations of <strong>3, 4, or 5 golden filters</strong> that
+                      repeating up to <strong>10 levels</strong> until your price becomes L1.
+                      This finds combinations of <strong>3 to 10 golden filters</strong> that
                       static analysis misses.
                     </div>
                     <div className="deep-warning">
@@ -876,7 +876,7 @@ export default function App() {
                       <div className="deep-progress-fill" />
                     </div>
                     <div style={{ fontSize: ".68rem", color: "var(--text4)", marginTop: ".5rem" }}>
-                      Exploring depth 1 → 2 → 3 → 4 → 5 golden filter combinations...
+                      Exploring depth 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 golden filter combinations...
                     </div>
                   </div>
                 )}

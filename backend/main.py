@@ -42,7 +42,8 @@ class FindL1Request(BaseModel):
     url: str
     seller_price: int
     location: Optional[str] = ""
-    max_depth: Optional[int] = 5
+    max_depth: Optional[int] = None
+    golden_filters: Optional[list] = []  # from initial /scrape response
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -154,14 +155,30 @@ def find_l1(req: FindL1Request):
             detail="URL must be a GeM portal page (gem.gov.in or mkp.gem.gov.in).",
         )
 
-    max_depth = max(1, min(req.max_depth or 5, 8))  # clamp 1-8
+    # If frontend passed golden_filters from initial scrape, use them directly.
+    # Otherwise fall back to doing a fresh scrape inside find_l1_combinations.
+    golden_filters = req.golden_filters or []
+    if not golden_filters:
+        # No filters passed — do a quick scrape to get them
+        try:
+            scraped = GeMScraper().scrape(url, location=req.location or "")
+            golden_filters = [f for f in scraped.get("filters", []) if f.get("isGolden")]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch golden filters: {e}")
+
+    if not golden_filters:
+        raise HTTPException(
+            status_code=422,
+            detail="No golden filters found for this category. Cannot run deep search."
+        )
 
     try:
         result = GeMScraper().find_l1_combinations(
             url=url,
             seller_price=req.seller_price,
+            golden_filters=golden_filters,
             location=req.location or "",
-            max_depth=max_depth,
+            max_depth=req.max_depth,  # None = dynamic (= number of golden filters)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Deep search failed: {e}")

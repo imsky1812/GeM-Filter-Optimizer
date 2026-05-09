@@ -78,7 +78,7 @@ class GeMScraper:
     MAX_ENRICH = 1000            # Enrich up to 1000 products with full specs
     ENRICH_WORKERS = 20          # Parallel workers for spec fetching
     MAX_FILTERS = 15             # Max filters to return
-    MAX_COMBO_DEPTH = 5          # Explore golden filter combos up to 5 levels deep
+    MAX_COMBO_DEPTH = 10          # Explore golden filter combos up to 10 levels deep
     MAX_API_CALLS = 120          # Safety ceiling: stop exploration after this many re-scrapes
 
     def __init__(self):
@@ -210,248 +210,290 @@ class GeMScraper:
         result["appliedFilters"] = selected_filters
         return result
 
-    def find_l1_combinations(self, url: str, seller_price: int, location: str = "", max_depth: int = None, max_api_calls: int = None) -> dict:
+    def find_l1_combinations(
+        self,
+        url: str,
+        seller_price: int,
+        golden_filters: list,          # already scraped golden filters with values
+        location: str = "",
+        max_depth: int = None,
+        max_api_calls: int = None,
+    ) -> dict:
         """
-        Cascading re-scrape engine: iteratively applies golden filters and re-scrapes
-        the GeM API after each one to find the next available golden filter options,
-        repeating until the seller's price becomes L1 in the narrowed niche.
+        Cascading L1 finder.
 
-        Algorithm:
-        1. Scrape unfiltered listing → collect all golden filters
-        2. For each golden filter value → re-scrape WITH that filter applied
-        3. From the narrowed result, pick next available golden filter → re-scrape again
-        4. Repeat up to max_depth levels; record every L1 win found along the way
-        5. Stop early if max_api_calls safety ceiling is reached
-
-        Returns {combinations, totalScraped, progress, truncated, baseProductCount, ...}
+        KEY DESIGN DECISIONS:
+        - golden_filters come from the initial /scrape (no re-enrichment needed)
+        - Each cascade step uses _fast_price_scrape: fetches all listing pages in
+          parallel (NO product detail page visits) to get the true min price fast
+        - Remaining golden filters = initial set MINUS already-applied keys
+          (GeM never adds NEW golden filters when you narrow — it only removes the
+           ones you've already applied, so re-discovery is never needed)
+        - Results sorted deepest-first (most filters = most specific niche)
         """
-        if max_depth is None:
-            max_depth = self.MAX_COMBO_DEPTH
         if max_api_calls is None:
             max_api_calls = self.MAX_API_CALLS
 
         url = url.strip()
-        url, base_extra_params = self._normalize_url(url)
+        url, base_extra = self._normalize_url(url)
 
-        combinations = []  # Valid L1 combos found
-        progress_log = []  # Progress messages
-        total_scraped = 0  # Total re-scrape API calls made
-        seen_combos = set()  # Dedup combo signatures
-        truncated = False  # True if we hit the API call ceiling
-
-        # ── Step 1: Initial unfiltered scrape ────────────────────────────────
-        progress_log.append("[Step 1] Scraping unfiltered category listing...")
-        base_result = self._scrape_category_listing(url, base_extra_params, location)
-        total_scraped += 1
-
-        if not base_result.get("products"):
-            return {
-                "combinations": [],
-                "totalScraped": total_scraped,
-                "progress": progress_log,
-                "baseProductCount": 0,
-                "truncated": False,
-                "error": "No products found in base listing.",
-            }
-
-        base_products = base_result["products"]
-        base_filters = base_result["filters"]
-        golden_filters = [f for f in base_filters if f.get("isGolden", False)]
-
-        progress_log.append(
-            f"[Step 1] Found {len(base_products)} products, "
-            f"{len(golden_filters)} golden filters available."
-        )
+        # Only work with golden filters that have at least 2 values
+        golden_filters = [
+            f for f in golden_filters
+            if f.get("isGolden") and len(f.get("values", [])) >= 1
+        ]
 
         if not golden_filters:
-            progress_log.append("[Step 1] No golden filters found — cannot cascade.")
             return {
                 "combinations": [],
-                "totalScraped": total_scraped,
-                "progress": progress_log,
-                "baseProductCount": len(base_products),
+                "totalScraped": 0,
+                "progress": ["No golden filters found — cannot cascade."],
                 "truncated": False,
                 "goldenFilterCount": 0,
             }
 
-        # ── Recursive cascading explorer ──────────────────────────────────────
-        def explore(applied_filters: list, current_filters: list, depth: int):
-            """Recursively apply each available golden filter, re-scrape, and recurse."""
-            nonlocal total_scraped, truncated
+        # Dynamic depth = number of golden filters (no hardcoded cap)
+        if max_depth is None:
+            max_depth = len(golden_filters)
 
-            if depth > max_depth:
+        combinations = []
+        progress_log = []
+        seen_combos = set()
+        api_calls = [0]
+        truncated = [False]
+
+        progress_log.append(
+            f"[Start] {len(golden_filters)} golden filters · "
+            f"max depth {max_depth} · seller price ₹{seller_price:,}"
+        )
+
+        def explore(applied: list, depth: int):
+            """Recursively apply one more golden filter, re-scrape for min price."""
+            if depth > max_depth or api_calls[0] >= max_api_calls:
+                if api_calls[0] >= max_api_calls:
+                    truncated[0] = True
                 return
 
-            if total_scraped >= max_api_calls:
-                if not truncated:
-                    truncated = True
-                    progress_log.append(
-                        f"[Safety] Reached {max_api_calls} API calls — stopping exploration early."
-                    )
+            applied_keys = {f["filterKey"] for f in applied}
+            # Remaining = all golden filters minus already-applied keys
+            available = [g for g in golden_filters if g["filterKey"] not in applied_keys]
+
+            if not available:
                 return
 
-            # Only consider golden filters at each depth level
-            available_golden = [
-                f for f in current_filters
-                if f.get("isGolden", False)
-                and f["filterKey"] not in {af["filterKey"] for af in applied_filters}
-            ]
-
-            if not available_golden:
-                progress_log.append(
-                    f"[Depth {depth}] No more golden filters available in this narrowed set."
-                )
-                return
-
-            for gf in available_golden:
-                if total_scraped >= max_api_calls:
-                    truncated = True
+            for gf in available:
+                if api_calls[0] >= max_api_calls:
+                    truncated[0] = True
                     return
 
                 for val in gf.get("values", []):
-                    if total_scraped >= max_api_calls:
-                        truncated = True
+                    if api_calls[0] >= max_api_calls:
+                        truncated[0] = True
                         return
 
                     new_filter = {
-                        "filterKey": gf["filterKey"],
+                        "filterKey":  gf["filterKey"],
                         "filterName": gf["filterName"],
-                        "value": val,
-                        "isGolden": True,
+                        "value":      val,
+                        "isGolden":   True,
                     }
-                    new_applied = applied_filters + [new_filter]
+                    new_applied = applied + [new_filter]
 
-                    # Dedup: canonical sorted signature
+                    # Dedup
                     sig = tuple(sorted((f["filterKey"], f["value"]) for f in new_applied))
                     if sig in seen_combos:
                         continue
                     seen_combos.add(sig)
 
-                    # ── Re-scrape with all applied filters ────────────────
+                    # Build filter params for this combo
+                    extra = dict(base_extra) if base_extra else {}
+                    for af in new_applied:
+                        extra[af["filterKey"]] = af["value"]
+
                     combo_label = " + ".join(
                         f'{f["filterName"]}: {f["value"]}' for f in new_applied
                     )
-                    progress_log.append(f"[Depth {depth}] Re-scraping → {combo_label}")
 
                     try:
-                        extra = dict(base_extra_params) if base_extra_params else {}
-                        for af in new_applied:
-                            extra[af["filterKey"]] = af["value"]
+                        # Fast scrape: only listing pages, zero enrichment
+                        result = self._fast_price_scrape(url, extra, location)
+                        api_calls[0] += 1
 
-                        filtered_result = self._scrape_category_listing(url, extra, location)
-                        total_scraped += 1
+                        min_price     = result["min_price"]
+                        total_in_niche = result["total"]
+                        n_products    = result["product_count"]
 
-                        filtered_products = filtered_result.get("products", [])
-                        filtered_filters = filtered_result.get("filters", [])
-
-                        # ── Untapped niche (no competitors at all) ────────
-                        if not filtered_products:
+                        # ── Untapped niche (zero products in this niche) ──────
+                        if n_products == 0 and total_in_niche == 0:
                             combinations.append({
-                                "combo": new_applied,
-                                "label": combo_label,
-                                "competitorCount": 0,
+                                "combo":             new_applied,
+                                "label":             combo_label,
+                                "competitorCount":   0,
                                 "minCompetitorPrice": None,
-                                "sellerPrice": seller_price,
-                                "priceGap": 0,
-                                "isUntapped": True,
-                                "hasGolden": True,
-                                "status": "WIN",
-                                "competitors": [],
-                                "depth": depth,
-                                "totalInNiche": filtered_result.get("totalResults", 0),
+                                "sellerPrice":       seller_price,
+                                "priceGap":          0,
+                                "isUntapped":        True,
+                                "hasGolden":         True,
+                                "status":            "WIN",
+                                "competitors":       [],
+                                "depth":             depth,
+                                "totalInNiche":      0,
                             })
                             progress_log.append(
-                                f"  → ✅ UNTAPPED NICHE (depth {depth}) — no competitors!"
+                                f"  ✅ UNTAPPED (depth {depth}): {combo_label}"
                             )
-                            # Don't go deeper — already a guaranteed win
+                            continue  # can't go deeper — no products to narrow
+
+                        if min_price is None:
+                            # Could not determine price — go deeper anyway
+                            if depth < max_depth:
+                                explore(new_applied, depth + 1)
                             continue
 
-                        min_comp_price = min(p["price"] for p in filtered_products)
-                        is_l1 = seller_price < min_comp_price
-
-                        if is_l1:
-                            # ── L1 Win ───────────────────────────────────
-                            price_gap = min_comp_price - seller_price
-                            competitors = sorted(filtered_products, key=lambda p: p["price"])[:5]
+                        if seller_price < min_price:
+                            # ── L1 WIN ───────────────────────────────────────
+                            price_gap = min_price - seller_price
                             combinations.append({
-                                "combo": new_applied,
-                                "label": combo_label,
-                                "competitorCount": len(filtered_products),
-                                "minCompetitorPrice": min_comp_price,
-                                "sellerPrice": seller_price,
-                                "priceGap": price_gap,
-                                "isUntapped": False,
-                                "hasGolden": True,
-                                "status": "WIN",
-                                "competitors": competitors,
-                                "depth": depth,
-                                "totalInNiche": filtered_result.get("totalResults", 0),
+                                "combo":             new_applied,
+                                "label":             combo_label,
+                                "competitorCount":   n_products,
+                                "minCompetitorPrice": min_price,
+                                "sellerPrice":       seller_price,
+                                "priceGap":          price_gap,
+                                "isUntapped":        False,
+                                "hasGolden":         True,
+                                "status":            "WIN",
+                                "competitors":       [],
+                                "depth":             depth,
+                                "totalInNiche":      total_in_niche,
                             })
                             progress_log.append(
-                                f"  → ✅ L1 WIN (depth {depth})! "
-                                f"Gap ₹{price_gap:,} vs {len(filtered_products)} competitors."
+                                f"  ✅ L1 WIN depth {depth}: gap ₹{price_gap:,} "
+                                f"(min competitor ₹{min_price:,}, {n_products} products)"
                             )
-                            # Continue deeper: adding more golden filters may find
-                            # even stronger / more specific niches
-                            if depth < max_depth and filtered_filters:
-                                explore(new_applied, filtered_filters, depth + 1)
+                            # Still go deeper — more filters = more specific/defensible niche
+                            if depth < max_depth:
+                                explore(new_applied, depth + 1)
 
                         else:
-                            # ── Not L1 yet — go deeper to narrow the niche ──
                             progress_log.append(
-                                f"  → Not L1 yet (cheapest ₹{min_comp_price:,}, "
-                                f"yours ₹{seller_price:,}) — going deeper..."
+                                f"  ✗ depth {depth}: min ₹{min_price:,} < ₹{seller_price:,} — going deeper"
                             )
-                            if depth < max_depth and filtered_filters:
-                                explore(new_applied, filtered_filters, depth + 1)
+                            if depth < max_depth:
+                                explore(new_applied, depth + 1)
 
                     except Exception as e:
-                        progress_log.append(f"  → Error: {str(e)[:120]}")
+                        progress_log.append(f"  Error: {str(e)[:100]}")
                         continue
 
-        # ── Start exploration from depth 1 ────────────────────────────────────
-        progress_log.append(f"[Step 2] Starting cascading golden filter exploration (max depth {max_depth})...")
-        explore([], base_filters, 1)
+        progress_log.append(f"[Cascade] Exploring up to depth {max_depth}...")
+        explore([], 1)
 
-        # ── Score and rank combinations ───────────────────────────────────────
-        for combo in combinations:
-            if combo["isUntapped"]:
-                combo["score"] = 100
+        # ── Score and sort: deepest first, then largest price gap ─────────────
+        for c in combinations:
+            if c["isUntapped"]:
+                c["score"] = 1000 + c["depth"] * 10
             else:
-                max_gap = max(seller_price * 0.8, 1)
-                gap_score = min(combo["priceGap"] / max_gap, 1) * 100
-                scarcity_score = max(1 - combo["competitorCount"] / 10, 0) * 100
-                # Reward deeper combos slightly (more specific = more defensible niche)
-                depth_bonus = min(combo["depth"] * 5, 20)
-                combo["score"] = round(gap_score * 0.55 + scarcity_score * 0.35 + depth_bonus * 0.1)
+                max_gap   = max(seller_price * 0.8, 1)
+                gap_s     = min(c["priceGap"] / max_gap, 1) * 60
+                scar_s    = max(1 - c["competitorCount"] / 10, 0) * 25
+                depth_s   = c["depth"] * 5
+                c["score"] = round(gap_s + scar_s + depth_s)
 
-        combinations.sort(key=lambda c: (c["score"], c["depth"]), reverse=True)
+        # Deepest first → within same depth, highest score first
+        combinations.sort(key=lambda c: (c["depth"], c["score"]), reverse=True)
 
         summary = (
-            f"[Done] Found {len(combinations)} L1 combinations "
-            f"across {total_scraped} re-scrapes"
+            f"[Done] {len(combinations)} L1 combos found "
+            f"in {api_calls[0]} re-scrapes"
         )
-        if truncated:
-            summary += f" (search stopped early at {max_api_calls} API calls)."
-        else:
-            summary += "."
+        if truncated[0]:
+            summary += f" (capped at {max_api_calls} calls)"
         progress_log.append(summary)
 
         return {
-            "combinations": combinations,
-            "totalScraped": total_scraped,
-            "progress": progress_log,
-            "truncated": truncated,
-            "baseProductCount": len(base_products),
+            "combinations":    combinations,
+            "totalScraped":    api_calls[0],
+            "progress":        progress_log,
+            "truncated":       truncated[0],
             "goldenFilterCount": len(golden_filters),
-            "goldenFilters": [
-                {
-                    "filterName": gf["filterName"],
-                    "filterKey": gf["filterKey"],
-                    "values": gf["values"],
-                }
-                for gf in golden_filters
-            ],
+        }
+
+    # ── FAST PRICE SCRAPE (no enrichment) ────────────────────────────────────
+
+    def _fast_price_scrape(self, url: str, extra_params: dict, location: str) -> dict:
+        """
+        Fetches ALL category listing pages IN PARALLEL with retry.
+        Returns the true minimum price across every product in the filtered result.
+        No product detail page visits — prices only, ~10-50x faster than full scrape.
+        """
+        base_url = url.split("#")[0].split("?")[0]
+        if not base_url.endswith("/search"):
+            base_url = base_url.rstrip("/")
+
+        extra_qs = ""
+        if extra_params:
+            filtered = {k: v for k, v in extra_params.items()
+                        if k.lower() not in ("page", "format")}
+            if filtered:
+                extra_qs = "&" + urlencode(filtered)
+        if location and location.lower() not in ("", "all india", "all"):
+            extra_qs += "&localized_search=" + requests.utils.quote(location)
+
+        # Step 1: page 1 — get total count
+        page1_url = f"{base_url}?page=1&format=json{extra_qs}"
+        try:
+            text = self._fetch(page1_url).strip()
+            if not text.startswith("{"):
+                return {"min_price": None, "total": 0, "product_count": 0}
+            data1 = json.loads(text)
+        except Exception:
+            return {"min_price": None, "total": 0, "product_count": 0}
+
+        total         = data1.get("number_of_results", 0)
+        catalogs1     = data1.get("catalogs", [])
+        per_page      = max(len(catalogs1), 10)
+        total_pages   = max(1, -(-total // per_page))
+        total_pages   = min(total_pages, self.MAX_JSON_PAGES)
+
+        all_prices = [int(c.get("final_price", {}).get("value", 0))
+                      for c in catalogs1
+                      if int(c.get("final_price", {}).get("value", 0)) > 0]
+
+        if total_pages == 1:
+            return {
+                "min_price":     min(all_prices) if all_prices else None,
+                "total":         total,
+                "product_count": len(all_prices),
+            }
+
+        # Step 2: remaining pages in parallel with up to 3 retries per page
+        def fetch_page(page: int) -> list:
+            for attempt in range(3):
+                try:
+                    purl = f"{base_url}?page={page}&format=json{extra_qs}"
+                    t = self._fetch(purl).strip()
+                    if not t.startswith("{"):
+                        return []
+                    d = json.loads(t)
+                    return [int(c.get("final_price", {}).get("value", 0))
+                            for c in d.get("catalogs", [])
+                            if int(c.get("final_price", {}).get("value", 0)) > 0]
+                except Exception:
+                    if attempt < 2:
+                        time.sleep(1)
+            return []
+
+        pages_left = list(range(2, total_pages + 1))
+        with ThreadPoolExecutor(max_workers=min(20, len(pages_left))) as ex:
+            futures = [ex.submit(fetch_page, pg) for pg in pages_left]
+            for f in as_completed(futures):
+                all_prices.extend(f.result())
+
+        return {
+            "min_price":     min(all_prices) if all_prices else None,
+            "total":         total,
+            "product_count": len(all_prices),
         }
 
     # ── PRODUCT DETAIL PAGE ───────────────────────────────────────────────────
@@ -545,88 +587,97 @@ class GeMScraper:
 
     def _scrape_category_listing(self, url: str, extra_params: dict = None, location: str = "") -> dict:
         """
-        Scrape a GeM category listing page using the JSON API.
-        Fetches ALL pages to get every product in the category.
-        extra_params: additional query params extracted from fragment-based URLs.
-        location: optional Indian state name to filter by seller registered address.
+        Scrape ALL products in a GeM category using their JSON API.
+        Strategy:
+          1. Fetch page 1 to get total_results count + facets
+          2. Fetch ALL remaining pages IN PARALLEL (20 workers, retry on failure)
+          3. For each catalog item, try to extract specs from the listing JSON directly
+             (most GeM categories include spec data inline — no product page visit needed)
+          4. Only fall back to product-page enrichment for products where inline specs
+             were missing golden-filter fields
         """
         base_url = url.split("#")[0].split("?")[0]
         if not base_url.endswith("/search"):
             base_url = base_url.rstrip("/")
 
-        # Build extra query string from fragment params (excluding page/format)
         extra_qs = ""
         if extra_params:
             filtered = {k: v for k, v in extra_params.items()
                         if k.lower() not in ("page", "format")}
             if filtered:
                 extra_qs = "&" + urlencode(filtered)
-
-        # Append location filter if a specific state is selected
         if location and location.lower() not in ("", "all india", "all"):
             extra_qs += "&localized_search=" + requests.utils.quote(location)
 
-        all_products = []
-        facet_defs = []
-        total_results = 0
+        # ── Step 1: Page 1 — get total count + facets ────────────────────────
+        page1_url = f"{base_url}?page=1&format=json{extra_qs}"
+        text = self._fetch(page1_url).strip()
+        if not text.startswith("{"):
+            if extra_qs:
+                # Fragment params may be client-side; retry bare
+                extra_qs = ""
+                page1_url = f"{base_url}?page=1&format=json"
+                text = self._fetch(page1_url).strip()
+            if not text.startswith("{"):
+                return self._scrape_html_listing(url)
 
-        # Fetch ALL pages from the JSON API (12 products per page)
-        for page in range(1, self.MAX_JSON_PAGES + 1):
-            if page > 1:
-                time.sleep(0.2)
-            json_url = f"{base_url}?page={page}&format=json{extra_qs}"
-            try:
-                text = self._fetch(json_url)
-                text = text.strip()
-                if not text.startswith("{"):
-                    if page == 1 and extra_qs:
-                        # Fragment params (like q=) may be client-side only;
-                        # retry without them before giving up
-                        extra_qs = ""
-                        json_url = f"{base_url}?page=1&format=json"
-                        text = self._fetch(json_url).strip()
-                        if not text.startswith("{"):
-                            return self._scrape_html_listing(url)
-                    elif page == 1:
-                        return self._scrape_html_listing(url)
-                    else:
-                        break
+        try:
+            data1 = json.loads(text)
+        except json.JSONDecodeError:
+            return self._scrape_html_listing(url)
 
-                data = json.loads(text)
-                total_results = data.get("number_of_results", 0)
+        total_results = data1.get("number_of_results", 0)
+        facet_defs    = self._extract_facet_defs(data1.get("facets", {}))
+        catalogs1     = data1.get("catalogs", [])
+        per_page      = max(len(catalogs1), 10)
+        total_pages   = max(1, -(-total_results // per_page))  # ceiling div
+        total_pages   = min(total_pages, self.MAX_JSON_PAGES)
 
-                catalogs = data.get("catalogs", [])
-                for cat in catalogs:
-                    product = {
-                        "id": cat.get("id", ""),
-                        "name": cat.get("title", ""),
-                        "price": int(cat.get("final_price", {}).get("value", 0)),
-                        "brand": cat.get("brand", ""),
-                        "seller": cat.get("seller", {}).get("name", ""),
-                        "sellerType": cat.get("seller", {}).get("display_sold_as", ""),
-                        "rating": cat.get("seller", {}).get("rating", ""),
-                        "listPrice": int(cat.get("list_price", {}).get("value", 0)),
-                        "discount": cat.get("discount_percent", 0),
-                        "imgUrl": cat.get("img_url", ""),
-                        "productUrl": self._build_product_url(cat),
-                        "specs": {},
-                    }
-                    if product["price"] > 0:
-                        all_products.append(product)
+        def parse_catalog(cat: dict) -> dict | None:
+            price = int(cat.get("final_price", {}).get("value", 0))
+            if price <= 0:
+                return None
+            product = {
+                "id":         cat.get("id", ""),
+                "name":       cat.get("title", ""),
+                "price":      price,
+                "brand":      cat.get("brand", ""),
+                "seller":     cat.get("seller", {}).get("name", ""),
+                "sellerType": cat.get("seller", {}).get("display_sold_as", ""),
+                "rating":     cat.get("seller", {}).get("rating", ""),
+                "listPrice":  int(cat.get("list_price", {}).get("value", 0)),
+                "discount":   cat.get("discount_percent", 0),
+                "imgUrl":     cat.get("img_url", ""),
+                "productUrl": self._build_product_url(cat),
+                "specs":      self._extract_inline_specs(cat),
+            }
+            return product
 
-                if page == 1:
-                    facet_defs = self._extract_facet_defs(data.get("facets", {}))
+        all_products = [p for cat in catalogs1 if (p := parse_catalog(cat))]
 
-                # Stop if we got fewer products than a full page (no more data)
-                if len(catalogs) < 10:
-                    break
+        # ── Step 2: Remaining pages in parallel with retry ────────────────────
+        def fetch_page(page: int) -> list:
+            for attempt in range(3):
+                try:
+                    purl = f"{base_url}?page={page}&format=json{extra_qs}"
+                    t = self._fetch(purl).strip()
+                    if not t.startswith("{"):
+                        return []
+                    d = json.loads(t)
+                    return [p for cat in d.get("catalogs", []) if (p := parse_catalog(cat))]
+                except Exception:
+                    if attempt < 2:
+                        time.sleep(1)
+            return []
 
-            except (json.JSONDecodeError, requests.RequestException) as e:
-                if page == 1:
-                    raise RuntimeError(f"Failed to parse category listing: {e}")
-                break
+        if total_pages > 1:
+            pages_left = list(range(2, total_pages + 1))
+            with ThreadPoolExecutor(max_workers=min(20, len(pages_left))) as ex:
+                futures = [ex.submit(fetch_page, pg) for pg in pages_left]
+                for f in as_completed(futures):
+                    all_products.extend(f.result())
 
-        # Enrich products with specs from their detail pages (parallel)
+        # ── Step 3: Enrich only products missing golden filter specs ──────────
         if all_products:
             all_products, all_filters = self._enrich_and_build_filters(
                 all_products, facet_defs
@@ -635,13 +686,13 @@ class GeMScraper:
             all_filters = []
 
         return {
-            "filters": all_filters,
-            "products": all_products,
-            "url": url,
+            "filters":      all_filters,
+            "products":     all_products,
+            "url":          url,
             "productCount": len(all_products),
-            "filterCount": len(all_filters),
+            "filterCount":  len(all_filters),
             "totalResults": total_results,
-            "location": location or "All India",
+            "location":     location or "All India",
         }
 
     def _build_product_url(self, catalog: dict) -> str:
@@ -651,42 +702,92 @@ class GeMScraper:
             return f"https://mkp.gem.gov.in/{'/'.join(url_parts)}"
         return ""
 
+    def _extract_inline_specs(self, cat: dict) -> dict:
+        """
+        Extract specs directly from the catalog listing JSON item.
+        GeM embeds specs in multiple possible fields — try all of them.
+        This avoids visiting individual product pages for most products.
+        """
+        specs = {}
+        # Common keys GeM uses for inline specs
+        for key in ("specifications", "product_specifications", "spec_params",
+                    "params", "attributes", "properties", "features"):
+            items = cat.get(key, [])
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        # Try all naming patterns GeM uses
+                        name  = (item.get("name") or item.get("key") or
+                                 item.get("label") or item.get("param_name") or "")
+                        value = (item.get("value") or item.get("val") or
+                                 item.get("param_value") or "")
+                        if name and value and len(str(value)) < 200:
+                            specs[str(name).strip()] = str(value).strip()
+            elif isinstance(items, dict):
+                for name, value in items.items():
+                    if name and value and len(str(value)) < 200:
+                        specs[str(name).strip()] = str(value).strip()
+        return specs
+
     def _extract_facet_defs(self, facets: dict) -> list:
-        """Extract facet definitions from the JSON response."""
+        """
+        Extract facet definitions — and their values — from the JSON response.
+        GeM sometimes includes facet_values/topValues directly in the facet object.
+        When present, we can skip product-page enrichment for those filters entirely.
+        """
         defs = []
+
+        def _pull_values(facet: dict) -> list:
+            """Try to read filter values directly from the facet API response."""
+            for key in ("facet_values", "topValues", "top_values", "values",
+                        "entries", "options", "items", "terms"):
+                raw = facet.get(key, [])
+                if not raw:
+                    continue
+                vals = []
+                for v in raw:
+                    if isinstance(v, dict):
+                        label = (v.get("name") or v.get("value") or
+                                 v.get("code") or v.get("label") or "")
+                    else:
+                        label = str(v)
+                    label = str(label).strip()
+                    if label and label.lower() not in ("true", "false", "null", ""):
+                        vals.append(label)
+                if vals:
+                    return vals
+            return []
 
         spec_facets = facets.get("product specifications", {}).get("facet_list", [])
         for facet in spec_facets:
-            name = facet.get("name", "")
-            code = facet.get("code", "")
+            name      = facet.get("name", "")
+            code      = facet.get("code", "")
             css_class = facet.get("css_class", "")
             if len(name) > 80:
                 continue
             defs.append({
-                "filterName": name,
-                "filterKey": code,
-                "isGolden": css_class == "golden",
-                "type": facet.get("type", ""),
+                "filterName":  name,
+                "filterKey":   code,
+                "isGolden":    css_class == "golden",
+                "type":        facet.get("type", ""),
+                "facetValues": _pull_values(facet),  # values from API (may be [])
             })
 
         admin_facets = facets.get("administrative", {}).get("facet_list", [])
         for facet in admin_facets:
-            name = facet.get("name", "")
-            code = facet.get("code", "")
-            
-            is_golden = False
+            name  = facet.get("name", "")
+            code  = facet.get("code", "")
             name_lower = name.lower()
-            if "make in india" in name_lower or "mse" in name_lower or "startup" in name_lower or "pac" in name_lower:
-                is_golden = True
-
+            is_golden = any(k in name_lower for k in
+                            ("make in india", "mse", "startup", "pac"))
             if is_golden or name in ("Make in India", "Lead Time for Dispatch"):
                 defs.append({
-                    "filterName": name,
-                    "filterKey": code,
-                    "isGolden": is_golden,
-                    "type": facet.get("type", ""),
+                    "filterName":  name,
+                    "filterKey":   code,
+                    "isGolden":    is_golden,
+                    "type":        facet.get("type", ""),
+                    "facetValues": _pull_values(facet),
                 })
-
 
         return defs
 
@@ -752,68 +853,87 @@ class GeMScraper:
 
     def _enrich_and_build_filters(self, products: list, facet_defs: list) -> tuple:
         """
-        Fetch product detail pages IN PARALLEL to extract specifications.
-        Then build filter values from the collected specs.
-        Returns (all_products_with_specs, filters)
+        Build filter values from product specs.
+
+        Strategy (fastest-first cascade):
+        1. Use facetValues from the API response directly (zero extra requests)
+        2. Use inline specs already extracted from the listing JSON
+        3. Only visit product detail pages for golden filters STILL missing values
+           — prioritise cheapest products (most relevant for L1 analysis)
         """
-        name_to_code = {}
+        name_to_code = {fd["filterName"]: fd["filterKey"] for fd in facet_defs}
+
+        # ── Level 1: values from facet API ───────────────────────────────────
+        filter_values: dict[str, set] = {}
+        facet_api_covered: set[str] = set()  # codes covered by API values
         for fd in facet_defs:
-            name_to_code[fd["filterName"]] = fd["filterKey"]
+            api_vals = fd.get("facetValues", [])
+            if api_vals:
+                filter_values[fd["filterKey"]] = set(api_vals)
+                facet_api_covered.add(fd["filterKey"])
 
-        # Select products to enrich — spread across price range for coverage
-        # Sort by price and sample evenly to cover cheap, mid, and expensive
-        products_sorted = sorted(products, key=lambda p: p["price"])
-        total = len(products_sorted)
-        enrich_count = min(self.MAX_ENRICH, total)
+        # ── Level 2: inline specs already in each catalog item ────────────────
+        for product in products:
+            for spec_name, spec_value in product.get("specs", {}).items():
+                if not spec_value or len(spec_value) > 150:
+                    continue
+                code = name_to_code.get(spec_name)
+                if not code:
+                    for fname, fcode in name_to_code.items():
+                        if self._names_match(spec_name, fname):
+                            code = fcode
+                            break
+                if code:
+                    filter_values.setdefault(code, set()).add(spec_value)
 
-        if enrich_count < total:
-            # Evenly sample across price range
-            step = total / enrich_count
-            indices = [int(i * step) for i in range(enrich_count)]
-            to_enrich = [products_sorted[i] for i in indices]
-        else:
-            to_enrich = products_sorted
+        # ── Level 3: product-page enrichment for STILL-missing golden filters ─
+        golden_codes_missing = {
+            fd["filterKey"] for fd in facet_defs
+            if fd.get("isGolden")
+            and fd["filterKey"] not in filter_values
+        }
 
-        # Parallel spec fetching
-        filter_values = {}
+        if golden_codes_missing:
+            # Sort cheapest first — if we find values early, we stop sooner
+            products_sorted = sorted(products, key=lambda p: p["price"])
+            to_enrich = products_sorted[:self.MAX_ENRICH]
 
-        with ThreadPoolExecutor(max_workers=self.ENRICH_WORKERS) as executor:
-            futures = {
-                executor.submit(self._enrich_single_product, p, name_to_code): p
-                for p in to_enrich
-            }
-            for future in as_completed(futures):
-                try:
-                    product = future.result()
-                    # Collect filter values from specs
-                    for code in name_to_code.values():
-                        val = product["specs"].get(code)
-                        if val:
-                            filter_values.setdefault(code, set()).add(val)
-                except Exception:
-                    pass
+            with ThreadPoolExecutor(max_workers=self.ENRICH_WORKERS) as executor:
+                futures = {
+                    executor.submit(self._enrich_single_product, p, name_to_code): p
+                    for p in to_enrich
+                }
+                for future in as_completed(futures):
+                    try:
+                        product = future.result()
+                        for code in name_to_code.values():
+                            val = product["specs"].get(code)
+                            if val:
+                                filter_values.setdefault(code, set()).add(val)
+                    except Exception:
+                        pass
+                    # Early stop: if all golden filters now have values, done
+                    if not (golden_codes_missing - filter_values.keys()):
+                        break
 
-        # Build final filter list with actual values from products
+        # ── Build final filter list ───────────────────────────────────────────
         filters = []
         for fd in facet_defs:
             code = fd["filterKey"]
             vals = sorted(filter_values.get(code, set()))
-            if not vals or len(vals) < 2:
+            if not vals:
                 continue
-            if len(vals) > 20:
-                vals = vals[:20]
-
             filters.append({
                 "filterName": fd["filterName"],
-                "filterKey": code,
-                "values": vals,
-                "isGolden": fd.get("isGolden", False),
-                "type": fd.get("type", ""),
+                "filterKey":  code,
+                "values":     vals[:20],
+                "isGolden":   fd.get("isGolden", False),
+                "type":       fd.get("type", ""),
             })
 
-        filters.sort(key=lambda f: (not f.get("isGolden", False), -len(f["values"]), f["filterName"]))
-
+        filters.sort(key=lambda f: (not f["isGolden"], -len(f["values"]), f["filterName"]))
         return products, filters[:self.MAX_FILTERS]
+
 
     # ── HTML FALLBACK ────────────────────────────────────────────────────────
 
