@@ -84,6 +84,7 @@ class GeMScraper:
     def __init__(self):
         self._session = requests.Session()
         self._session.headers.update(self.HEADERS)
+        self._product_specs_cache = {}
         
         # Configure robust retry strategy for connection timeouts and server errors
         retry_strategy = Retry(
@@ -259,6 +260,7 @@ class GeMScraper:
         combinations = []
         progress_log = []
         seen_combos = set()
+        scrape_memo = {}
         api_calls = [0]
         truncated = [False]
 
@@ -314,10 +316,16 @@ class GeMScraper:
                         f'{f["filterName"]}: {f["value"]}' for f in new_applied
                     )
 
+                    memo_key = tuple(sorted(extra.items()))
+
                     try:
-                        # Fast scrape: only listing pages, zero enrichment
-                        result = self._fast_price_scrape(url, extra, location)
-                        api_calls[0] += 1
+                        if memo_key in scrape_memo:
+                            result = scrape_memo[memo_key]
+                        else:
+                            # Fast scrape: only listing pages, zero enrichment
+                            result = self._fast_price_scrape(url, extra, location, seller_price=seller_price)
+                            api_calls[0] += 1
+                            scrape_memo[memo_key] = result
 
                         min_price     = result["min_price"]
                         total_in_niche = result["total"]
@@ -421,7 +429,7 @@ class GeMScraper:
 
     # ── FAST PRICE SCRAPE (no enrichment) ────────────────────────────────────
 
-    def _fast_price_scrape(self, url: str, extra_params: dict, location: str) -> dict:
+    def _fast_price_scrape(self, url: str, extra_params: dict, location: str, seller_price: int = None) -> dict:
         """
         Fetches ALL category listing pages IN PARALLEL with retry.
         Returns the true minimum price across every product in the filtered result.
@@ -460,6 +468,14 @@ class GeMScraper:
                       for c in catalogs1
                       if int(c.get("final_price", {}).get("value", 0)) > 0]
 
+        # Early exit: if we already found a competitor cheaper than or equal to seller_price, we can't win
+        if seller_price is not None and any(p <= seller_price for p in all_prices):
+            return {
+                "min_price":     min(all_prices) if all_prices else None,
+                "total":         total,
+                "product_count": len(all_prices),
+            }
+
         if total_pages == 1:
             return {
                 "min_price":     min(all_prices) if all_prices else None,
@@ -488,7 +504,11 @@ class GeMScraper:
         with ThreadPoolExecutor(max_workers=min(20, len(pages_left))) as ex:
             futures = [ex.submit(fetch_page, pg) for pg in pages_left]
             for f in as_completed(futures):
-                all_prices.extend(f.result())
+                prices = f.result()
+                all_prices.extend(prices)
+                # Early exit loop inside ThreadPoolExecutor if a cheaper competitor is found
+                if seller_price is not None and any(p <= seller_price for p in prices):
+                    break
 
         return {
             "min_price":     min(all_prices) if all_prices else None,
@@ -824,10 +844,14 @@ class GeMScraper:
 
     def _enrich_single_product(self, product: dict, name_to_code: dict) -> dict:
         """Fetch specs for a single product (used by thread pool)."""
-        if not product.get("productUrl"):
+        url = product.get("productUrl")
+        if not url:
+            return product
+        if url in self._product_specs_cache:
+            product["specs"] = self._product_specs_cache[url]
             return product
         try:
-            html = self._fetch(product["productUrl"])
+            html = self._fetch(url)
             soup = BeautifulSoup(html, "html.parser")
             raw_specs = self._extract_specs_from_page(soup)
 
@@ -846,6 +870,7 @@ class GeMScraper:
                 else:
                     matched_specs[self._to_key(spec_name)] = spec_value
 
+            self._product_specs_cache[url] = matched_specs
             product["specs"] = matched_specs
         except Exception:
             pass
