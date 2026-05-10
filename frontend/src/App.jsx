@@ -394,6 +394,7 @@ export default function App() {
   const [deepStatus, setDeepStatus] = useState("idle"); // idle | loading | done | error
   const [deepResults, setDeepResults] = useState(null);
   const [deepError, setDeepError] = useState("");
+  const [deepDepthTab, setDeepDepthTab] = useState(null); // selected depth tab
 
   // Fetch locations on mount
   useEffect(() => {
@@ -485,6 +486,7 @@ export default function App() {
     setDeepStatus("loading");
     setDeepResults(null);
     setDeepError("");
+    setDeepDepthTab(null);
     setActiveTab("deep");
 
     let normalizedUrl = gemUrl.trim();
@@ -936,23 +938,46 @@ export default function App() {
                           Found <strong>{deepResults.combinations.length}</strong> L1 winning combinations
                           via live re-scraping — sorted by opportunity score:
                         </div>
-                        {/* Group by depth */}
-                        {[...new Set(deepResults.combinations.map(c => c.depth))].sort().map(depth => {
-                          const group = deepResults.combinations.filter(c => c.depth === depth);
+                        {(() => {
+                          const depths = [...new Set(deepResults.combinations.map(c => c.depth))].sort((a, b) => a - b);
+                          const activeDepth = deepDepthTab !== null && depths.includes(deepDepthTab)
+                            ? deepDepthTab
+                            : depths[0];
+                          const group = deepResults.combinations.filter(c => c.depth === activeDepth);
                           return (
-                            <div key={depth} className="depth-group">
-                              <div className="depth-group-hdr">
-                                <span className="depth-badge">Depth {depth}</span>
-                                <span className="depth-badge-sub">
-                                  {depth} golden filter{depth > 1 ? "s" : ""} applied — {group.length} win{group.length !== 1 ? "s" : ""}
-                                </span>
+                            <>
+                              {/* Depth Tab Bar */}
+                              <div className="depth-tab-bar">
+                                {depths.map(d => {
+                                  const cnt = deepResults.combinations.filter(c => c.depth === d).length;
+                                  const isActive = d === activeDepth;
+                                  return (
+                                    <button
+                                      key={d}
+                                      className={`depth-tab-btn${isActive ? " depth-tab-active" : ""}`}
+                                      onClick={() => setDeepDepthTab(d)}
+                                    >
+                                      <span className="depth-tab-label">Depth {d}</span>
+                                      <span className="depth-tab-count">{cnt}</span>
+                                    </button>
+                                  );
+                                })}
                               </div>
+
+                              {/* Tab description */}
+                              <div className="depth-tab-desc">
+                                <span className="depth-badge">Depth {activeDepth}</span>
+                                &nbsp;— {activeDepth} golden filter{activeDepth > 1 ? "s" : ""} applied
+                                &nbsp;·&nbsp; <strong>{group.length}</strong> winning niche{group.length !== 1 ? "s" : ""}
+                              </div>
+
+                              {/* Combo cards for active depth */}
                               {group.map((r, i) => (
                                 <OpportunityCard key={i} r={r} rank={i + 1} />
                               ))}
-                            </div>
+                            </>
                           );
-                        })}
+                        })()}
 
                         {/* Progress log toggle */}
                         <details className="progress-log-details">
