@@ -408,6 +408,9 @@ class GeMScraper:
                 depth_s   = c["depth"] * 5
                 c["score"] = round(gap_s + scar_s + depth_s)
 
+        # Filter out depths 1 & 2 per user directive (only depth 3+ shown)
+        combinations = [c for c in combinations if c["depth"] > 2]
+
         # Deepest first → within same depth, highest score first
         combinations.sort(key=lambda c: (c["depth"], c["score"]), reverse=True)
 
