@@ -501,6 +501,9 @@ export default function App() {
           seller_price: priceNum,
           location: selectedLocation,
           max_depth: 10,
+          golden_filters: scrapedData
+            ? scrapedData.filters.filter((f) => f.isGolden)
+            : [],
         }),
       });
       if (!res.ok) {

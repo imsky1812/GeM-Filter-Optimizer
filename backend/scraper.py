@@ -77,9 +77,9 @@ class GeMScraper:
     MAX_JSON_PAGES = 500          # Fetch up to 500 pages (all products)
     MAX_ENRICH = 1000            # Enrich up to 1000 products with full specs
     ENRICH_WORKERS = 20          # Parallel workers for spec fetching
-    MAX_FILTERS = 15             # Max filters to return
+    MAX_FILTERS = 10             # Max non-golden filters to return (all golden filters always returned)
     MAX_COMBO_DEPTH = 10          # Explore golden filter combos up to 10 levels deep
-    MAX_API_CALLS = 120          # Safety ceiling: stop exploration after this many re-scrapes
+    MAX_API_CALLS = 500          # Safety ceiling: stop exploration after this many re-scrapes
 
     def __init__(self):
         self._session = requests.Session()
@@ -942,22 +942,31 @@ class GeMScraper:
                         break
 
         # ── Build final filter list ───────────────────────────────────────────
-        filters = []
+        golden_filters = []
+        non_golden_filters = []
         for fd in facet_defs:
             code = fd["filterKey"]
             vals = sorted(filter_values.get(code, set()))
             if not vals:
                 continue
-            filters.append({
+            entry = {
                 "filterName": fd["filterName"],
                 "filterKey":  code,
                 "values":     vals[:20],
                 "isGolden":   fd.get("isGolden", False),
                 "type":       fd.get("type", ""),
-            })
+            }
+            if fd.get("isGolden", False):
+                golden_filters.append(entry)
+            else:
+                non_golden_filters.append(entry)
 
-        filters.sort(key=lambda f: (not f["isGolden"], -len(f["values"]), f["filterName"]))
-        return products, filters[:self.MAX_FILTERS]
+        # Always return ALL golden filters (never cap them) — they are used for deep search
+        golden_filters.sort(key=lambda f: (-len(f["values"]), f["filterName"]))
+        # Cap non-golden filters for display only
+        non_golden_filters.sort(key=lambda f: (-len(f["values"]), f["filterName"]))
+        filters = golden_filters + non_golden_filters[:self.MAX_FILTERS]
+        return products, filters
 
 
     # ── HTML FALLBACK ────────────────────────────────────────────────────────
