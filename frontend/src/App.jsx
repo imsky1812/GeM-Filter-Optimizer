@@ -608,7 +608,7 @@ export default function App() {
             Fetching products · Extracting specs · Building filters...
             <br />
             <span style={{ fontSize: ".7rem", color: "var(--text4)" }}>
-              This takes ~30s (scraping {">"}30 product pages)
+              Scanning all products in category (unlimited pages)
             </span>
           </div>
         )}
