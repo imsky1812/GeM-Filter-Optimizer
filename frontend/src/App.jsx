@@ -919,18 +919,54 @@ export default function App() {
                 {deepStatus === "error" && (
                   <div className="err-box" style={{ marginTop: "1rem" }}>
                     {deepError}
-                    <button
-                      className="btn btn-deep"
-                      onClick={handleDeepSearch}
-                      style={{ marginTop: "1rem" }}
-                    >
-                      Retry
-                    </button>
+                    <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
+                      <button
+                        className="btn btn-deep"
+                        onClick={() => handleDeepSearch(deepRange.min, deepRange.max)}
+                        style={{ flex: 1 }}
+                      >
+                        Retry
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => setDeepStatus("idle")}
+                        style={{ 
+                          flex: 1, 
+                          background: "rgba(255,255,255,0.05)", 
+                          color: "var(--text2)",
+                          border: "1px solid var(--border)"
+                        }}
+                      >
+                        ← Back to Options
+                      </button>
+                    </div>
                   </div>
                 )}
 
                 {deepStatus === "done" && deepResults && (
                   <>
+                    <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: "1.2rem" }}>
+                      <button
+                        onClick={() => setDeepStatus("idle")}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          color: "var(--text2)",
+                          padding: "6px 12px",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                          fontSize: ".75rem",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          transition: "all 0.2s"
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.borderColor = "var(--primary)"}
+                        onMouseOut={(e) => e.currentTarget.style.borderColor = "var(--border)"}
+                      >
+                        <span>←</span> Back to Deep Search Options
+                      </button>
+                    </div>
                     <div className="deep-summary-row">
                       <div className="deep-stat">
                         <div className="deep-stat-val">{deepResults.combinations?.length ?? 0}</div>
