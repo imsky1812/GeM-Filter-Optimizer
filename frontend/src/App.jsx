@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import "./index.css";
 
-const BACKEND_URL = "http://localhost:8000";
+const BACKEND_URL = "/api";
 
 // ─── ANALYSIS ENGINE ──────────────────────────────────────────────────────────
 
@@ -389,6 +389,7 @@ export default function App() {
   const [locations, setLocations] = useState(["All India"]);
   const [selectedLocation, setSelectedLocation] = useState("All India");
   const analyzeTimerRef = useRef(null);
+  const handlePrintReport = () => window.print();
 
   // Deep Search state
   const [deepStatus, setDeepStatus] = useState("idle"); // idle | loading | done | error
@@ -934,9 +935,15 @@ export default function App() {
                       </div>
                     ) : (
                       <>
-                        <div style={{ fontSize: ".72rem", color: "var(--text3)", marginBottom: "1rem" }}>
-                          Found <strong>{deepResults.combinations.length}</strong> L1 winning combinations
-                          via live re-scraping — sorted by opportunity score:
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                          <div style={{ fontSize: ".72rem", color: "var(--text3)" }}>
+                            Found <strong>{deepResults.combinations.length}</strong> L1 winning combinations
+                            via live re-scraping:
+                          </div>
+                          <button className="btn-sec" style={{ padding: "6px 12px", fontSize: ".7rem", display: "flex", alignItems: "center", gap: "6px" }} onClick={handlePrintReport}>
+                            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/></svg>
+                            Export Strategy Report
+                          </button>
                         </div>
                         {(() => {
                           const depths = [...new Set(deepResults.combinations.map(c => c.depth))].sort((a, b) => a - b);

@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=info
+    volumes:
+      # Persistent cache storage mapping for future expansions
+      - app-cache:/app/backend/cache
+
+volumes:
+  app-cache:

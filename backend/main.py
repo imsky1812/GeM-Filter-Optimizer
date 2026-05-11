@@ -5,15 +5,33 @@ your product ranks #1 (cheapest price) in every filtered sub-niche.
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from scraper import GeMScraper
 import hashlib
 import time
+import logging
+import os
 
+# ── Configure Production Logging ──────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("gem-optimizer")
 
-app = FastAPI(title="GeM Filter Optimizer API", version="3.1.0")
+app = FastAPI(
+    title="GeM Filter Optimizer API", 
+    version="3.2.0",
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json"
+)
 
+# ── Middlewares ───────────────────────────────────────────────────────────────
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses >1KB
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -329,3 +347,13 @@ def _analyze(products: list, seller_price: int, seller_specs: dict, filters: lis
         })
 
     return sorted(results, key=lambda r: r["score"], reverse=True)
+
+
+# ── PRODUCTION STATIC FILE MOUNT ───────────────────────────────────────────────
+# Mounts compiled React static frontend if 'dist' folder exists in scope
+static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist")
+if os.path.isdir(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+    logger.info(f"Production frontend mounted successfully from {static_dir}")
+else:
+    logger.info("Static directory 'dist' not found; standalone API mode enabled.")

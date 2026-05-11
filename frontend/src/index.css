@@ -326,3 +326,16 @@ input:focus{border-color:var(--accent);background:var(--bg);box-shadow:0 0 0 3px
   .stats{grid-template-columns:1fr 1fr;}
   .hdr h1{font-size:1.3rem;}
 }
+
+/* ── Print Styles ──────────────────────────────────────────────────────────── */
+@media print {
+  body, :root { background: #ffffff !important; color: #000000 !important; --text: #000; --text2: #222; --text3: #444; }
+  body::before, body::after { display: none !important; }
+  .app { padding: 0; max-width: 100%; }
+  .hdr, .input-card, .tab-bar, .stats, .charts-grid, .depth-tab-bar, button, .progress-log-details { display: none !important; }
+  .card, .surface, .surface2, .res-list-item { background: #ffffff !important; color: #000 !important; border: 1px solid #ddd !important; box-shadow: none !important; }
+  .deep-group-title, .depth-badge, .score-val, .win-score { color: #000 !important; border-color: #ccc !important; background: #f8f8f8 !important; text-shadow: none !important;}
+  .tag-item { background: #f0f0f0 !important; color: #000 !important; border: 1px solid #ccc !important; }
+  .res-list-item { page-break-inside: avoid; }
+}
+

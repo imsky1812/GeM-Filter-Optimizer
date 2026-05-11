@@ -488,23 +488,25 @@ class GeMScraper:
 
         # Step 2: remaining pages in parallel with up to 3 retries per page
         def fetch_page(page: int) -> list:
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     purl = f"{base_url}?page={page}&format=json{extra_qs}"
-                    t = self._fetch(purl).strip()
+                    t = self._fetch(purl, retries=2).strip()
                     if not t.startswith("{"):
-                        return []
+                        # Trigger retry if GeM sent HTML redirects or captcha
+                        raise ValueError("Response is not JSON")
                     d = json.loads(t)
                     return [int(c.get("final_price", {}).get("value", 0))
                             for c in d.get("catalogs", [])
                             if int(c.get("final_price", {}).get("value", 0)) > 0]
                 except Exception:
-                    if attempt < 2:
-                        time.sleep(1)
+                    if attempt < 4:
+                        time.sleep(2 * (attempt + 1))
             return []
 
         pages_left = list(range(2, total_pages + 1))
-        with ThreadPoolExecutor(max_workers=min(20, len(pages_left))) as ex:
+        # Lower workers to 8 for stability against GeM WAF
+        with ThreadPoolExecutor(max_workers=min(8, len(pages_left))) as ex:
             futures = [ex.submit(fetch_page, pg) for pg in pages_left]
             for f in as_completed(futures):
                 prices = f.result()
@@ -680,25 +682,29 @@ class GeMScraper:
 
         # ── Step 2: Remaining pages in parallel with retry ────────────────────
         def fetch_page(page: int) -> list:
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     purl = f"{base_url}?page={page}&format=json{extra_qs}"
-                    t = self._fetch(purl).strip()
+                    t = self._fetch(purl, retries=2).strip()
                     if not t.startswith("{"):
-                        return []
+                        # GeM served HTML (likely a captcha or rate limit redirect), trigger retry loop
+                        raise ValueError("Response received is not JSON")
                     d = json.loads(t)
                     return [p for cat in d.get("catalogs", []) if (p := parse_catalog(cat))]
                 except Exception:
-                    if attempt < 2:
-                        time.sleep(1)
+                    if attempt < 4:
+                        time.sleep(2 * (attempt + 1)) # backoff
             return []
 
         if total_pages > 1:
             pages_left = list(range(2, total_pages + 1))
-            with ThreadPoolExecutor(max_workers=min(20, len(pages_left))) as ex:
+            # Use safer 8 workers instead of aggressive 20 to avoid WAF rate limits
+            with ThreadPoolExecutor(max_workers=min(8, len(pages_left))) as ex:
                 futures = [ex.submit(fetch_page, pg) for pg in pages_left]
                 for f in as_completed(futures):
-                    all_products.extend(f.result())
+                    res = f.result()
+                    if res:
+                        all_products.extend(res)
 
         # ── Step 3: Enrich only products missing golden filter specs ──────────
         if all_products:
