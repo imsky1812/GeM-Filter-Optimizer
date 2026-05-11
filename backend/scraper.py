@@ -9,12 +9,17 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs, urlencode, urldefrag
 
 
 class GeMScraper:
+    # Global class-level semaphore ensures no more than 8 concurrent HTTP requests 
+    # are sent to GeM's network ANYWHERE in the entire backend application loop,
+    # completely insulating our server from firing Firewall-banning spikes.
+    _HTTP_SEMAPHORE = threading.BoundedSemaphore(8)
 
     HEADERS = {
         "User-Agent": (
@@ -1004,7 +1009,9 @@ class GeMScraper:
         last_err = None
         for attempt in range(retries):
             try:
-                resp = self._session.get(url, timeout=20, allow_redirects=True)
+                # Wait for our slot in the global concurrency queue before fetching
+                with GeMScraper._HTTP_SEMAPHORE:
+                    resp = self._session.get(url, timeout=20, allow_redirects=True)
                 resp.raise_for_status()
                 
                 # Check if GeM redirected us to the homepage or login page due to missing session

@@ -101,6 +101,18 @@ def scrape(req: ScrapeRequest):
             detail="URL must be a GeM portal page (gem.gov.in, mkp.gem.gov.in, or mkp.gemorion.org).",
         )
 
+    # ── Passive RAM Cleanup Trigger ──
+    # Purge old items automatically to stop RAM leaks
+    _now = time.time()
+    _expired = [k for k, v in _cache.items() if (_now - v["ts"]) >= CACHE_TTL]
+    for k in _expired:
+        del _cache[k]
+    # If cache size grows too large due to high volume, force prune oldest 5 entries
+    if len(_cache) > 25:
+        _sorted_keys = sorted(_cache.keys(), key=lambda k: _cache[k]["ts"])
+        for k in _sorted_keys[:5]:
+            del _cache[k]
+
     cache_key = hashlib.md5(f"{url}|{req.location or ''}".encode()).hexdigest()
     cached = _cache.get(cache_key)
     if cached and (time.time() - cached["ts"]) < CACHE_TTL:
