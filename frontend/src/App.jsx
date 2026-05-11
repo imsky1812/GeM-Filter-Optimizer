@@ -14,25 +14,25 @@ function detectDependencies(products, filters) {
   for (let i = 0; i < filters.length; i++) {
     for (let j = 0; j < filters.length; j++) {
       if (i === j) continue;
-      
+
       const f1 = filters[i];
       const f2 = filters[j];
       const observations = {};
       let totalObserved = 0;
-      
+
       for (const p of products) {
         const v1 = String(p.specs[f1.filterKey] || "").toLowerCase();
         const v2 = String(p.specs[f2.filterKey] || "").toLowerCase();
-        
+
         if (v1 && v2) {
           if (!observations[v1]) observations[v1] = new Set();
           observations[v1].add(v2);
           totalObserved++;
         }
       }
-      
+
       // Need enough representative data to infer a hard taxonomy rule
-      if (totalObserved < 10) continue; 
+      if (totalObserved < 10) continue;
 
       let strictlyDetermines = true;
       for (const v2Set of Object.values(observations)) {
@@ -41,7 +41,7 @@ function detectDependencies(products, filters) {
           break;
         }
       }
-      
+
       if (strictlyDetermines) {
         const mapping = {};
         for (const [v1, v2Set] of Object.entries(observations)) {
@@ -92,7 +92,7 @@ function findL1Opportunities(products, sellerPrice, filters) {
         if (i === j) continue;
         const c1 = combo[i];
         const c2 = combo[j];
-        
+
         const rule = rules.find(r => r.detKey === c1.key && r.depKey === c2.key);
         if (rule) {
           const expectedV2 = rule.mapping[c1.value.toLowerCase()];
@@ -131,7 +131,7 @@ function findL1Opportunities(products, sellerPrice, filters) {
     const scarcityScore = Math.max(1 - matching.length / 10, 0) * 100;
     const trafficScore = isUntapped ? 80 : Math.min(matching.length / 5, 1) * 100;
     const hasGolden = combo.some((c) => c.isGolden);
-    
+
     // Severely penalize score if combo does NOT include any Golden filters,
     // because GeM calculates L1 strictly based on Golden parameters.
     const rawScore = gapScore * 0.5 + scarcityScore * 0.3 + trafficScore * 0.2;
@@ -580,8 +580,8 @@ export default function App() {
             id="gem-url-input"
           />
           <div className="location-select-wrap">
-            <select 
-              value={selectedLocation} 
+            <select
+              value={selectedLocation}
               onChange={(e) => setSelectedLocation(e.target.value)}
               className="location-select"
               title="Filter by Seller Delivery Location"
@@ -750,12 +750,12 @@ export default function App() {
                     {results.combos.length} filter combos
                   </span>
                 </div>
-                <button 
-                  className="btn-sec" 
-                  style={{ padding: "6px 12px", fontSize: ".7rem", display: "flex", alignItems: "center", gap: "6px", height: "28px", background: "var(--accent-glow)", color: "var(--accent2)", border: "1px solid rgba(108,92,231,.2)" }} 
+                <button
+                  className="btn-sec"
+                  style={{ padding: "6px 12px", fontSize: ".7rem", display: "flex", alignItems: "center", gap: "6px", height: "28px", background: "var(--accent-glow)", color: "var(--accent2)", border: "1px solid rgba(108,92,231,.2)" }}
                   onClick={handlePrintReport}
                 >
-                  <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z"/></svg>
+                  <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z" /></svg>
                   Export Report
                 </button>
               </div>
@@ -892,7 +892,7 @@ export default function App() {
                       <div className="deep-progress-fill" />
                     </div>
                     <div style={{ fontSize: ".68rem", color: "var(--text4)", marginTop: ".5rem" }}>
-                      Exploring depth 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 golden filter combinations...
+                      Exploring depth 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 golden filter combinations...
                     </div>
                   </div>
                 )}
@@ -995,12 +995,11 @@ export default function App() {
                           <summary>View search log ({deepResults.progress?.length ?? 0} entries)</summary>
                           <div className="progress-log">
                             {(deepResults.progress ?? []).map((line, i) => (
-                              <div key={i} className={`log-line ${
-                                line.includes("✅") ? "log-win" :
-                                line.includes("Error") ? "log-err" :
-                                line.includes("[Done]") ? "log-done" :
-                                line.includes("deeper") ? "log-deeper" : ""
-                              }`}>
+                              <div key={i} className={`log-line ${line.includes("✅") ? "log-win" :
+                                  line.includes("Error") ? "log-err" :
+                                    line.includes("[Done]") ? "log-done" :
+                                      line.includes("deeper") ? "log-deeper" : ""
+                                }`}>
                                 {line}
                               </div>
                             ))}
