@@ -1,165 +1,97 @@
-# 🏆 GeM Filter Optimizer
+# 🚀 GeM Filter Optimizer — Enterprise Edition
 
-**Find the exact filters that make your product rank #1 (L1) on the Government e-Marketplace (GeM).**
+[![License](https://img.shields.io/badge/License-Commercial-blue.svg)](https://opensource.org/licenses/MIT)
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/Frontend-React%2018-61DAFB.svg)](https://reactjs.org/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
-GeM Filter Optimizer is a full-stack intelligence tool built for GeM sellers. It scrapes real product listings from any GeM category, analyzes every possible filter combination, and instantly tells you which filters to apply on your listing so that buyers always see your product as the **cheapest (L1)** in that filtered view.
-
----
-
-## 🎯 The Problem
-
-On GeM, buyers filter products by specifications like brand, material, capacity, etc. Your product might not be the overall cheapest, but it **could be the cheapest within specific filter combinations**. Manually checking hundreds of filter permutations is impossible — this tool automates it.
-
-## 💡 How It Works
-
-1. **Paste** a GeM category URL (e.g., `https://mkp.gem.gov.in/{category}/search`)
-2. **Scrape** — the backend fetches all products and their specs via GeM's internal JSON API
-3. **Enter your price** — the tool instantly finds every filter combination where your price beats all competitors
-4. **Apply the filters** on your GeM seller dashboard and rank L1!
+**Secure the L1 Winning Slot effortlessly. Automated market intelligence to dominate Government e-Marketplace (GeM) listings.**
 
 ---
 
-## 🖥️ Tech Stack
+## 🎯 Overview
 
-| Layer      | Technology                        |
-|------------|-----------------------------------|
-| Frontend   | React 18, Vite, Recharts          |
-| Backend    | Python, FastAPI, Uvicorn          |
-| Scraping   | Requests, BeautifulSoup4          |
-| Styling    | Custom CSS (dark theme)           |
+**GeM Filter Optimizer** is a high-performance full-stack business intelligence engine designed to help GeM vendors maximize their sales ranking. By analyzing competitor taxonomy and processing real-time market payloads, it accurately surfaces specific combinations of "Golden Filters" that position your pricing as the undisputed **lowest valid price (L1)**.
+
+Stop manually checking thousands of permutations. Apply dynamic data science to your sales operation.
+
+## 💎 Key Features
+
+- 🕷️ **High-Volume Scaled Scraper**: Effortlessly ingest entire categories (10,000+ pages) via asynchronous multi-threaded payload fetching.
+- 🧠 **Deep Cascade Logic (Levels 3-10)**: Proprietary recursion tree traversal uncovers non-obvious, deeply nested niches where major brands are excluded.
+- 🛡️ **Anti-Throttling Core**: Self-healing query engine with linear retry back-off safeguards against portal firewalls and WAF limiters.
+- ⚡ **Ultra-Low Latency API**: Backend with integrated **GZip compression** middleware minimizes payload transit size for sub-second interactions.
+- 📊 **Interactive Visualization**: Advanced React plotting for distribution density, pricing spectrums, and competitor opportunity matrices.
+- 📜 **Instant PDF Strategy Report**: Generate formatted, print-ready executive summaries that isolate exact actionable settings for product management teams.
 
 ---
 
-## 📁 Project Structure
+## 📁 Technical Architecture
 
 ```
-gem-filter-optimizer/
-│
-├── frontend/                    # React web app (Vite)
-│   ├── src/
-│   │   ├── App.jsx              # Main application component (UI + analysis engine)
-│   │   ├── index.css            # All styles (dark theme)
-│   │   └── main.jsx             # React DOM entry point
-│   ├── index.html               # HTML shell
-│   ├── package.json             # Node dependencies
-│   └── vite.config.js           # Vite dev server config (proxies to backend)
-│
-├── backend/                     # Python FastAPI server
-│   ├── main.py                  # API routes (/scrape, /analyze, /cache)
-│   ├── scraper.py               # GeM scraper (requests + BeautifulSoup)
-│   ├── requirements.txt         # Python dependencies
-│   └── __init__.py
-│
-├── docs/
-│   └── GeM_Filter_Optimizer_Spec.docx
-│
-├── .gitignore
-├── SETUP.txt                    # Quick setup guide
-└── README.md                    # This file
+GeM-Filter-Optimizer/
+├── Dockerfile                 # Multistage Production Image Builder
+├── docker-compose.yml         # Single-command deployment orchestrator
+├── run_production.bat         # Retail Installer for Non-Technical Clients
+├── backend/
+│   ├── main.py                # API entry & monolithic Static Web mounting
+│   ├── scraper.py             # Advanced concurrent recursion engine
+│   └── requirements.txt       
+└── frontend/
+    ├── src/
+    │   ├── App.jsx            # Analysis intelligence core
+    │   └── index.css          # Premium dark glassmorphism styles
+    └── vite.config.js         
 ```
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Deployment Scenarios
 
-### Prerequisites
+### Scenario A: Automated Local Launch (Windows)
+Perfect for retail/sales users who lack programming experience.
+1. Download/Clone this repository.
+2. Double-click **`run_production.bat`**.
+3. The script will automatically handle node installation, python virtual environments, and launch the secured interface at `http://localhost:8000`.
 
-- **Node.js 18+** — [Download](https://nodejs.org)
-- **Python 3.11+** — [Download](https://python.org/downloads)
-
-### 1. Clone the repository
-
+### Scenario B: Universal Docker (Recommended for Production)
+Ideal for running on private Cloud servers, VPS, AWS, or locally via Docker Desktop.
 ```bash
-git clone https://github.com/imsky1812/GeM-Filter-Optimizer.git
-cd GeM-Filter-Optimizer
+# Launch complete stack in isolated environment
+docker-compose up --build -d
 ```
+*The application will be hosted globally on port `:8000` with static rendering enabled.*
 
-### 2. Start the Backend
-
+### Scenario C: Standard Dev Setup
 ```bash
+# Terminal 1: Backend
 cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
-```
 
-### 3. Start the Frontend
-
-```bash
+# Terminal 2: Frontend 
 cd frontend
 npm install
 npm run dev
 ```
 
-### 4. Open the app
+---
 
-Navigate to **http://localhost:3000** in your browser.
+## 🔌 Advanced Configuration
+
+### Environment Bindings
+By default, the backend serves unified traffic. For distributed architecture, you can configure explicit routing:
+- **Frontend Build Direct**: `VITE_API_BASE_URL=/api`
+- **Backend Host Bind**: `0.0.0.0` (Internal container orchestration)
+
+### Logging & Diagnostics
+Production server utilizes integrated **FastAPI structured logging** for health auditing and real-time diagnostic visibility. Access OpenAPI documentation on deployment at `/api/docs`.
 
 ---
 
-## 🔌 API Endpoints
+## ⚖️ Legal & Licensing
+This software serves as a competitive analysis instrument. The software leverages publicly accessible, unauthenticated JSON data feeds provided by the destination web resources for information synthesis purposes only. User assumes adherence to target domain guidelines. 
 
-| Method   | Endpoint   | Description                              |
-|----------|------------|------------------------------------------|
-| `GET`    | `/`        | Health check                             |
-| `POST`   | `/scrape`  | Scrape a GeM URL → returns products + filters |
-| `POST`   | `/analyze` | Analyze filter opportunities             |
-| `DELETE` | `/cache`   | Clear the 30-min scrape cache            |
+***
 
-Swagger docs available at: `http://localhost:8000/docs`
-
----
-
-## 📖 Usage Guide
-
-1. **Find a category on GeM** — Go to [mkp.gem.gov.in](https://mkp.gem.gov.in), search for your product category, and click on the specific sub-category from the left sidebar.
-
-2. **Copy the URL** — It will look like:
-   ```
-   https://mkp.gem.gov.in/{category-slug}/search#/?q=...
-   ```
-
-3. **Paste into the tool** — Click "Scrape →" and wait ~30 seconds while it fetches all products and extracts specifications.
-
-4. **Enter your selling price** — The tool instantly computes all filter combinations where your price is the lowest (L1).
-
-5. **Apply the winning filters** — Go to your GeM Seller Dashboard → Edit your product listing → Set the recommended filter values → Save and submit.
-
----
-
-## ⚙️ Key Features
-
-- **Automated Scraping** — Fetches all products from GeM's internal JSON API (no browser automation needed)
-- **Parallel Spec Extraction** — Enriches products with full specifications using multi-threaded requests
-- **L1 Analysis Engine** — Tests every single-filter and 2-filter combination to find L1 opportunities
-- **Untapped Niche Detection** — Identifies filter combinations with zero competitors
-- **Opportunity Scoring** — Ranks results by price gap, competition scarcity, and traffic potential
-- **Smart Caching** — 30-minute cache to avoid redundant scraping
-- **Robust Session Handling** — Auto-retries with exponential backoff and session cookie management
-- **Dark Theme UI** — Clean, modern interface with interactive charts
-
----
-
-## ⚠️ Important Notes
-
-- This tool scrapes **publicly available** data from the GeM marketplace. No login is required.
-- Some category URLs may be deprecated or empty on GeM — the tool will notify you with a descriptive error message.
-- Use **category-specific URLs** (not global search URLs) for best results.
-- GeM may rate-limit aggressive scraping. The tool includes built-in throttling (0.2s delay between pages).
-
----
-
-## 📄 License
-
-This project is for educational and personal use. GeM marketplace data belongs to the Government e-Marketplace, Government of India.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Feel free to open issues or submit pull requests.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+**Built for Scale. Created for Results.** 📈
