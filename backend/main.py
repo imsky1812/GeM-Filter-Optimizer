@@ -61,6 +61,7 @@ class FindL1Request(BaseModel):
     seller_price: int
     location: Optional[str] = ""
     max_depth: Optional[int] = None
+    min_depth: Optional[int] = 3
     golden_filters: Optional[list] = []  # from initial /scrape response
 
 
@@ -209,6 +210,7 @@ def find_l1(req: FindL1Request):
             golden_filters=golden_filters,
             location=req.location or "",
             max_depth=req.max_depth,  # None = dynamic (= number of golden filters)
+            min_depth=req.min_depth,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Deep search failed: {e}")

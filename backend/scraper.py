@@ -6,6 +6,8 @@ No browser needed — uses requests + BeautifulSoup.
 import re
 import json
 import time
+import random
+import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -215,7 +217,6 @@ class GeMScraper:
         result = self._scrape_category_listing(url, extra_params, location)
         result["appliedFilters"] = selected_filters
         return result
-
     def find_l1_combinations(
         self,
         url: str,
@@ -223,6 +224,7 @@ class GeMScraper:
         golden_filters: list,          # already scraped golden filters with values
         location: str = "",
         max_depth: int = None,
+        min_depth: int = 3,
         max_api_calls: int = None,
     ) -> dict:
         """
@@ -261,6 +263,17 @@ class GeMScraper:
         # Dynamic depth = number of golden filters (no hardcoded cap)
         if max_depth is None:
             max_depth = len(golden_filters)
+        
+        # ── Tunneling Mode for Ultra Deep Searches (11+) ──
+        tunnel_mode = True if (min_depth and min_depth >= 11) else False
+
+        if tunnel_mode:
+            # Shuffle randomly to explore DIFFERENT vertical combinations on repeated clicks
+            random.shuffle(golden_filters)
+        else:
+            # Sort by fewest-values first to maximize vertical reach efficiently
+            golden_filters.sort(key=lambda f: len(f.get("values", [])))
+
 
         combinations = []
         progress_log = []
@@ -271,7 +284,8 @@ class GeMScraper:
 
         progress_log.append(
             f"[Start] {len(golden_filters)} golden filters · "
-            f"max depth {max_depth} · seller price ₹{seller_price:,}"
+            f"Depth {min_depth} to {max_depth} · "
+            f"TunnelMode={tunnel_mode} · seller price ₹{seller_price:,}"
         )
 
         def explore(applied: list, depth: int):
@@ -288,12 +302,21 @@ class GeMScraper:
             if not available:
                 return
 
-            for gf in available:
+            # In Tunnel Mode, we pick ONE available filter at each level to force 
+            # linear depth discovery rather than exploding horizontally.
+            target_filters = available[:1] if tunnel_mode else available
+
+            for gf in target_filters:
                 if api_calls[0] >= max_api_calls:
                     truncated[0] = True
                     return
 
-                for val in gf.get("values", []):
+                vals = gf.get("values", [])
+                if tunnel_mode:
+                    # Take top 3 values only to force vertical exploration
+                    vals = vals[:3]
+
+                for val in vals:
                     if api_calls[0] >= max_api_calls:
                         truncated[0] = True
                         return
@@ -413,8 +436,8 @@ class GeMScraper:
                 depth_s   = c["depth"] * 5
                 c["score"] = round(gap_s + scar_s + depth_s)
 
-        # Filter out depths 1 & 2 per user directive (only depth 3+ shown)
-        combinations = [c for c in combinations if c["depth"] > 2]
+        # Filter to only requested depth range
+        combinations = [c for c in combinations if c["depth"] >= min_depth]
 
         # Deepest first → within same depth, highest score first
         combinations.sort(key=lambda c: (c["depth"], c["score"]), reverse=True)

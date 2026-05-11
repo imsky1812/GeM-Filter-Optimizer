@@ -396,6 +396,7 @@ export default function App() {
   const [deepResults, setDeepResults] = useState(null);
   const [deepError, setDeepError] = useState("");
   const [deepDepthTab, setDeepDepthTab] = useState(null); // selected depth tab
+  const [deepRange, setDeepRange] = useState({ min: 3, max: 10 });
 
   // Fetch locations on mount
   useEffect(() => {
@@ -482,8 +483,9 @@ export default function App() {
     }
   };
 
-  const handleDeepSearch = async () => {
+  const handleDeepSearch = async (minD = 3, maxD = 10) => {
     if (!gemUrl.trim() || !priceNum) return;
+    setDeepRange({ min: minD, max: maxD });
     setDeepStatus("loading");
     setDeepResults(null);
     setDeepError("");
@@ -503,7 +505,8 @@ export default function App() {
           url: normalizedUrl,
           seller_price: priceNum,
           location: selectedLocation,
-          max_depth: 10,
+          min_depth: minD,
+          max_depth: maxD,
           golden_filters: scrapedData
             ? scrapedData.filters.filter((f) => f.isGolden)
             : [],
@@ -869,14 +872,30 @@ export default function App() {
                     <div className="deep-warning">
                       ⏱ This may take <strong>1–3 minutes</strong> depending on category size.
                     </div>
-                    <button
-                      className="btn btn-deep"
-                      onClick={handleDeepSearch}
-                      disabled={!priceNum || scrapeStatus !== "done"}
-                      id="deep-search-btn"
-                    >
-                      🔍 Start Deep Search
-                    </button>
+                    <div style={{ display: "flex", gap: "1rem", justifyContent: "center", flexWrap: "wrap" }}>
+                      <button
+                        className="btn btn-deep"
+                        onClick={() => handleDeepSearch(3, 10)}
+                        disabled={!priceNum || scrapeStatus !== "done"}
+                        style={{ flex: 1, minWidth: "200px" }}
+                      >
+                        🔍 Standard Search (3-10)
+                      </button>
+                      <button
+                        className="btn btn-deep"
+                        onClick={() => handleDeepSearch(11, 15)}
+                        disabled={!priceNum || scrapeStatus !== "done"}
+                        style={{ 
+                          flex: 1, 
+                          minWidth: "200px", 
+                          background: "linear-gradient(135deg, var(--primary), #9c27b0)",
+                          border: "none",
+                          boxShadow: "0 4px 12px rgba(156, 39, 176, 0.3)"
+                        }}
+                      >
+                        🚀 Ultra Deep Search (11-15)
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -892,7 +911,7 @@ export default function App() {
                       <div className="deep-progress-fill" />
                     </div>
                     <div style={{ fontSize: ".68rem", color: "var(--text4)", marginTop: ".5rem" }}>
-                      Exploring depth 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 golden filter combinations...
+                      Exploring depths {deepRange.min} to {deepRange.max} golden filter combinations...
                     </div>
                   </div>
                 )}
@@ -932,6 +951,35 @@ export default function App() {
                         </div>
                       )}
                     </div>
+                    
+                    {deepRange.max <= 10 && (
+                      <div style={{
+                        background: "rgba(156, 39, 176, 0.08)",
+                        border: "1px dashed rgba(156, 39, 176, 0.3)",
+                        borderRadius: "8px",
+                        padding: "0.8rem 1rem",
+                        marginBottom: "1.5rem",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "1rem",
+                        flexWrap: "wrap"
+                      }}>
+                        <div style={{ fontSize: ".8rem", color: "var(--text2)" }}>
+                          <strong style={{ color: "#9c27b0" }}>💡 Explore further?</strong> Standard search stopped at depth 10. Run an ultra-deep scan to find extreme combinations (11 to 15 filters).
+                        </div>
+                        <button 
+                          onClick={() => handleDeepSearch(11, 15)}
+                          style={{
+                            background: "linear-gradient(135deg, var(--primary), #9c27b0)",
+                            border: "none", color: "#fff", fontSize: ".75rem", fontWeight: "bold",
+                            padding: "6px 14px", borderRadius: "6px", cursor: "pointer", boxShadow: "0 2px 6px rgba(0,0,0,0.2)"
+                          }}
+                        >
+                          ⚡ Scan Depths 11 - 15
+                        </button>
+                      </div>
+                    )}
 
                     {deepResults.combinations?.length === 0 ? (
                       <div className="empty" style={{ marginTop: "1rem" }}>
