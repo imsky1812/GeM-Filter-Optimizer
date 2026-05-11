@@ -79,7 +79,7 @@ class GeMScraper:
     ]
 
     # Configuration
-    MAX_JSON_PAGES = 500          # Fetch up to 500 pages (all products)
+    MAX_JSON_PAGES = 2000         # Fetch up to 2000 pages (covers ~24,000 products)
     MAX_ENRICH = 1000            # Enrich up to 1000 products with full specs
     ENRICH_WORKERS = 20          # Parallel workers for spec fetching
     MAX_FILTERS = 10             # Max non-golden filters to return (all golden filters always returned)
