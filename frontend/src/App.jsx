@@ -956,10 +956,10 @@ export default function App() {
 
                     <div className="surpass-card">
                       <div className="surpass-title">
-                        <span>🎯</span> Targeted Elimination
+                        <span>🎯</span> Surgical Competitive Strike
                       </div>
                       <div className="surpass-desc">
-                        Found a specific cheap competitor that's blocking you? Paste their product link below to find the exact filter that disqualifies them.
+                        Analyze any competitor product link. We'll find the exact filter to <strong>eliminate</strong> cheap competitors or the blueprint of specs to <strong>join and win</strong> a high-priced niche.
                       </div>
                       <div className="surpass-input-group">
                         <input
@@ -973,7 +973,7 @@ export default function App() {
                           onClick={handleSurpass}
                           disabled={surpassStatus === "loading" || !surpassUrl.trim()}
                         >
-                          {surpassStatus === "loading" ? <span className="spin" /> : "Eliminate"}
+                          {surpassStatus === "loading" ? <span className="spin" /> : "Fetch Strategy"}
                         </button>
                       </div>
 
@@ -983,28 +983,128 @@ export default function App() {
                         </div>
                       )}
 
-                      {surpassResults && surpassResults.strategies && (
-                        <div style={{ marginTop: "1rem" }}>
-                          <div style={{ fontSize: ".7rem", color: "var(--text4)", fontWeight: 700, textTransform: "uppercase", marginBottom: "0.5rem" }}>
-                            Results for: {surpassResults.competitor?.name} (₹{surpassResults.competitor?.price?.toLocaleString()})
+                      {surpassResults && (
+                        <div style={{ marginTop: "1.5rem" }}>
+                          {/* Competitor Info Header */}
+                          <div style={{ 
+                            padding: "1rem", 
+                            background: "var(--surface3)", 
+                            borderRadius: "8px", 
+                            border: "1px solid var(--border)",
+                            marginBottom: "1.25rem"
+                          }}>
+                            <div style={{ fontSize: ".65rem", color: "var(--text4)", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "4px" }}>
+                              Targeted Competitor
+                            </div>
+                            <div style={{ fontSize: ".9rem", fontWeight: 700, color: "var(--text)", marginBottom: "8px", lineHeight: 1.3 }}>
+                              {surpassResults.competitor?.name || "Unknown Product"}
+                            </div>
+                            <div style={{ display: "flex", gap: "12px", alignItems: "baseline" }}>
+                              <div style={{ fontSize: "1.2rem", fontWeight: 800, color: "var(--red)" }}>
+                                ₹{surpassResults.competitor?.price?.toLocaleString() || "???"}
+                              </div>
+                              <a href={surpassResults.competitor?.url} target="_blank" rel="noreferrer" style={{ fontSize: ".7rem", color: "var(--accent2)", textDecoration: "none" }}>
+                                View on GeM ↗
+                              </a>
+                            </div>
                           </div>
-                          {surpassResults.strategies.length === 0 ? (
+
+                          {/* Competitor Specs Section */}
+                          {surpassResults.matchedSpecs && surpassResults.matchedSpecs.length > 0 && (
+                            <div style={{ marginBottom: "1.5rem" }}>
+                              <div style={{ fontSize: ".65rem", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "8px" }}>
+                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
+                                Competitor Active Specs
+                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                                {surpassResults.matchedSpecs.map((spec, idx) => (
+                                  <div key={idx} style={{ 
+                                    background: "var(--bg2)", 
+                                    padding: "8px 12px", 
+                                    borderRadius: "6px", 
+                                    border: "1px solid var(--border2)",
+                                    fontSize: ".75rem"
+                                  }}>
+                                    <div style={{ color: "var(--text4)", fontSize: ".6rem", fontWeight: 600, textTransform: "uppercase" }}>{spec.name}</div>
+                                    <div style={{ color: "var(--text2)", fontWeight: 500 }}>{spec.value}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Match Strategy Section (Joining a high-priced niche) */}
+                          {surpassResults.matchStrategy && (
+                            <div style={{ marginBottom: "1.5rem" }}>
+                              <div style={{ fontSize: ".65rem", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "8px" }}>
+                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
+                                Niche Winning Option (Join & Win)
+                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
+                              </div>
+                              <div className="killer-card" style={{ borderLeftColor: "var(--accent)", background: "var(--accent-glow)" }}>
+                                <div className="killer-info">
+                                  <div className="killer-tag" style={{ background: "var(--accent)", color: "#fff" }}>L1 Niche Entry</div>
+                                  <div className="killer-label" style={{ fontSize: ".9rem", marginTop: "4px" }}>
+                                    Match all filters of this <strong>high-priced product</strong> to dominate its niche.
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "10px" }}>
+                                    {surpassResults.matchStrategy.filters.map((f, i) => (
+                                      <div key={i} style={{ 
+                                        background: "var(--bg3)", 
+                                        padding: "4px 8px", 
+                                        borderRadius: "4px", 
+                                        fontSize: ".65rem",
+                                        border: "1px solid rgba(108, 92, 231, 0.3)"
+                                      }}>
+                                        <span style={{ color: "var(--text3)" }}>{f.name}:</span> <span style={{ color: "var(--accent2)", fontWeight: 700 }}>{f.value}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div style={{ fontSize: ".7rem", color: "var(--text2)", marginTop: "10px", fontStyle: "italic" }}>
+                                    Your price (₹{priceNum.toLocaleString()}) is significantly lower than the current L1 in this specific niche.
+                                  </div>
+                                </div>
+                                <div className="killer-price">
+                                  <div className="killer-price-val" style={{ color: "var(--accent2)" }}>
+                                    ₹{surpassResults.matchStrategy.minCompetitorPrice?.toLocaleString() || "???"}
+                                  </div>
+                                  <div className="killer-price-lbl">Current Niche L1</div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Strategies Section (Elimination) */}
+                          <div style={{ fontSize: ".65rem", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
+                            {surpassResults.competitor?.price < priceNum ? "Elimination Strategy (Way Forward)" : "Alternative Surgical Strikes"}
+                            <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
+                          </div>
+
+                          {surpassResults.strategies && surpassResults.strategies.length === 0 ? (
                             <div className="warn-box">
                               No single-step filters found to eliminate this competitor. They match all your golden filter options.
                             </div>
                           ) : (
-                            surpassResults.strategies.map((s, idx) => (
-                              <div key={idx} className="killer-card">
-                                <div className="killer-info">
-                                  <div className="killer-tag">Killer Filter</div>
-                                  <div className="killer-label">{s.label}</div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                              {(surpassResults.strategies || []).map((s, idx) => (
+                                <div key={idx} className="killer-card" style={{ borderLeftColor: "var(--green)" }}>
+                                  <div className="killer-info">
+                                    <div className="killer-tag" style={{ background: "var(--green-glow)", color: "var(--green)" }}>Killer Filter Found</div>
+                                    <div className="killer-label" style={{ fontSize: ".9rem", marginTop: "4px" }}>
+                                      Change <strong>{s.filterName}</strong> to <span style={{ color: "var(--green)", fontWeight: 800 }}>{s.value}</span>
+                                    </div>
+                                  </div>
+                                  <div className="killer-price">
+                                    <div className="killer-price-val" style={{ color: "var(--green)" }}>
+                                      {s.minCompetitorPrice === null ? "Untapped" : `₹${s.minCompetitorPrice.toLocaleString()}`}
+                                    </div>
+                                    <div className="killer-price-lbl">New Niche Min Price</div>
+                                  </div>
                                 </div>
-                                <div className="killer-price">
-                                  <div className="killer-price-val">₹{(s.minCompetitorPrice || 0).toLocaleString()}</div>
-                                  <div className="killer-price-lbl">New Min Price</div>
-                                </div>
-                              </div>
-                            ))
+                              ))}
+                            </div>
                           )}
                         </div>
                       )}

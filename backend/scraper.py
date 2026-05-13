@@ -506,13 +506,39 @@ class GeMScraper:
                     continue
             if len(winning_strategies) >= 5: break
 
+        # 3. Niche Matching Strategy (User joins this product's niche)
+        match_strategy = None
+        if comp_specs:
+            try:
+                # Combine all matched golden filters
+                match_extra = dict(base_extra) if base_extra else {}
+                for code, val in comp_specs.items():
+                    match_extra[code] = val
+                
+                res_match = self._fast_price_scrape(category_url, match_extra, location, seller_price=seller_price)
+                if res_match["min_price"] is None or res_match["min_price"] > seller_price:
+                    match_strategy = {
+                        "filters": [{"name": fn, "value": comp_specs[fk]} for fn, fk in name_to_code.items() if fk in comp_specs],
+                        "minCompetitorPrice": res_match["min_price"],
+                        "competitorCount": res_match["product_count"],
+                        "isMatch": True
+                    }
+            except:
+                pass
+
         return {
             "competitor": {
                 "name": comp_name,
                 "price": comp_price,
                 "url": competitor_url
             },
-            "strategies": winning_strategies
+            "matchedSpecs": [
+                {"name": gf["filterName"], "value": comp_specs.get(gf["filterKey"], "Not Specified")}
+                for gf in golden_filters
+                if gf["filterKey"] in comp_specs
+            ],
+            "strategies": winning_strategies,
+            "matchStrategy": match_strategy
         }
 
     # ── FAST PRICE SCRAPE (no enrichment) ────────────────────────────────────
