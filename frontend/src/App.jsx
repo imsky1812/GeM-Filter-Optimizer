@@ -245,6 +245,13 @@ export default function App() {
   const [deepResults, setDeepResults] = useState(null);
   const [deepError, setDeepError] = useState("");
   const [deepDepthTab, setDeepDepthTab] = useState(null); // selected depth tab
+
+  // Targeted Elimination state
+  const [surpassUrl, setSurpassUrl] = useState("");
+  const [surpassResults, setSurpassResults] = useState(null);
+  const [surpassStatus, setSurpassStatus] = useState("idle");
+  const [surpassError, setSurpassError] = useState("");
+
   const [deepRange, setDeepRange] = useState({ min: 3, max: 10 });
   const [mandatoryFilters, setMandatoryFilters] = useState([]);
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
@@ -274,6 +281,9 @@ export default function App() {
     setDeepStatus("idle");
     setDeepResults(null);
     setDeepError("");
+    setSurpassResults(null);
+    setSurpassUrl("");
+    setSurpassError("");
 
     // Auto-prepend https:// if user didn't include a protocol
     let normalizedUrl = gemUrl.trim();
@@ -351,21 +361,53 @@ export default function App() {
     }
   };
 
+  const handleSurpass = async () => {
+    if (!surpassUrl.trim() || !gemUrl.trim()) return;
+    setSurpassStatus("loading");
+    setSurpassResults(null);
+    setSurpassError("");
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/surpass`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category_url: gemUrl.trim(),
+          competitor_url: surpassUrl.trim(),
+          seller_price: priceNum,
+          location: selectedLocation,
+          golden_filters: scrapedData?.filters?.filter(f => f.isGolden) || []
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Competitor analysis failed");
+      }
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setSurpassResults(data);
+      setSurpassStatus("done");
+    } catch (e) {
+      setSurpassError(e.message || "Targeted search failed");
+      setSurpassStatus("error");
+    }
+  };
+
   const exportToPDF = () => {
     if (!deepResults || !deepResults.combinations) return;
-    
+
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.width;
-    
+
     doc.setFontSize(16);
     doc.setTextColor(20, 20, 30);
     doc.text("GeM L1 Filter Combinations", 14, 20);
-    
+
     doc.setFontSize(10);
     doc.setTextColor(100, 100, 100);
     const splitUrl = doc.splitTextToSize(`Category URL: ${gemUrl}`, pageWidth - 28);
     doc.text(splitUrl, 14, 28);
-    
+
     doc.text(`Target Price: Rs ${priceNum.toLocaleString()}`, 14, 38 + (splitUrl.length - 1) * 4);
 
     let currentY = 46 + (splitUrl.length - 1) * 4;
@@ -375,12 +417,12 @@ export default function App() {
       doc.setTextColor(0, 0, 0);
       const title = `Option ${idx + 1} (Score: ${comboData.score} | Competitors: ${comboData.competitorCount})`;
       doc.text(title, 14, currentY);
-      
+
       const tableData = comboData.combo.map(c => [
         c.name || c.filterName || c.filterKey || "Filter",
         c.value
       ]);
-      
+
       autoTable(doc, {
         startY: currentY + 4,
         head: [['Filter Name', 'Required Value']],
@@ -389,9 +431,9 @@ export default function App() {
         headStyles: { fillColor: [108, 92, 231] },
         margin: { left: 14, right: 14 },
       });
-      
+
       currentY = doc.lastAutoTable.finalY + 12;
-      
+
       if (currentY > doc.internal.pageSize.height - 20) {
         doc.addPage();
         currentY = 20;
@@ -525,20 +567,18 @@ export default function App() {
             {priceNum > 0 && (
               <div style={{ display: "flex", gap: "12px", marginLeft: "auto" }}>
                 <button
-                  className="btn btn-deep"
+                  className="btn btn-primary"
                   onClick={() => handleDeepSearch(3, 10)}
                   disabled={scrapeStatus !== "done"}
-                  style={{ padding: "8px 16px", fontSize: "0.85rem", background: "var(--primary)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", boxShadow: "0 4px 12px rgba(156, 39, 176, 0.3)" }}
                 >
-                  🔍 Standard Search (3-10)
+                  Deep Search (3-10)
                 </button>
                 <button
-                  className="btn btn-deep"
+                  className="btn btn-primary"
                   onClick={() => handleDeepSearch(11, 15)}
                   disabled={scrapeStatus !== "done"}
-                  style={{ padding: "8px 16px", fontSize: "0.85rem", background: "linear-gradient(135deg, var(--primary), #9c27b0)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", boxShadow: "0 4px 12px rgba(156, 39, 176, 0.3)" }}
                 >
-                  🚀 Ultra Deep Search (11-15)
+                  Ultra Deep Search(11-15)
                 </button>
               </div>
             )}
@@ -551,15 +591,15 @@ export default function App() {
             <div style={{ fontSize: "0.75rem", color: "var(--text3)", marginBottom: "1rem" }}>
               Select any specific features the buyer absolutely requires. The deep search will start from these filters and find the remaining golden filters needed for L1.
             </div>
-            
+
             {/* Selected Filters Chips */}
             {mandatoryFilters.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
                 {mandatoryFilters.map((mf, idx) => (
-                  <div key={idx} style={{ 
-                    background: "rgba(156, 39, 176, 0.15)", 
+                  <div key={idx} style={{
+                    background: "rgba(156, 39, 176, 0.15)",
                     border: "1px solid rgba(156, 39, 176, 0.4)",
-                    padding: "4px 8px", 
+                    padding: "4px 8px",
                     borderRadius: "4px",
                     fontSize: "0.75rem",
                     display: "flex",
@@ -568,7 +608,7 @@ export default function App() {
                   }}>
                     <span style={{ color: "var(--text2)" }}>{mf.filterName}:</span>
                     <strong style={{ color: "var(--text1)" }}>{mf.value}</strong>
-                    <button 
+                    <button
                       onClick={() => setMandatoryFilters(prev => prev.filter((_, i) => i !== idx))}
                       style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", marginLeft: "4px", padding: 0 }}
                     >
@@ -581,13 +621,13 @@ export default function App() {
 
             {/* Dropdown UI */}
             <div style={{ position: "relative" }}>
-              <button 
-                className="btn" 
+              <button
+                className="btn"
                 onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
-                style={{ 
-                  background: isFilterDropdownOpen ? "rgba(156, 39, 176, 0.15)" : "var(--surface1)", 
-                  border: isFilterDropdownOpen ? "1px solid var(--primary)" : "1px solid var(--border)", 
-                  fontSize: "0.8rem", 
+                style={{
+                  background: isFilterDropdownOpen ? "rgba(156, 39, 176, 0.15)" : "var(--surface1)",
+                  border: isFilterDropdownOpen ? "1px solid var(--primary)" : "1px solid var(--border)",
+                  fontSize: "0.8rem",
                   padding: "8px 16px",
                   borderRadius: "6px",
                   color: isFilterDropdownOpen ? "var(--text1)" : "var(--text2)",
@@ -598,7 +638,7 @@ export default function App() {
               </button>
 
               {isFilterDropdownOpen && scrapedData && (
-                <div className="custom-scrollbar" style={{ 
+                <div className="custom-scrollbar" style={{
                   position: "absolute", top: "100%", left: 0, marginTop: "8px",
                   background: "rgba(20, 20, 30, 0.95)", backdropFilter: "blur(12px)",
                   border: "1px solid rgba(255, 255, 255, 0.1)",
@@ -609,9 +649,9 @@ export default function App() {
                     const isHovered = hoveredFilterKey === filter.filterKey;
                     return (
                       <div key={filter.filterKey} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                        <div 
+                        <div
                           onClick={() => setHoveredFilterKey(isHovered ? null : filter.filterKey)}
-                          style={{ 
+                          style={{
                             padding: "10px 16px",
                             background: isHovered ? "rgba(156, 39, 176, 0.15)" : "transparent",
                             cursor: "pointer",
@@ -637,7 +677,7 @@ export default function App() {
                             {filter.values.map(val => {
                               const isSelected = mandatoryFilters.some(mf => mf.filterKey === filter.filterKey && mf.value === val);
                               return (
-                                <div 
+                                <div
                                   key={val}
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -694,232 +734,288 @@ export default function App() {
         <div className="card fade-in fade-in-d2">
           <div className="deep-search-panel">
             {deepStatus === "loading" && (
-                  <div className="deep-loading">
-                    <span className="spin spin-amber" />
-                    <div className="deep-loading-title">Deep Search Running...</div>
-                    <div className="deep-loading-sub">
-                      Re-scraping GeM with cascading golden filters.
-                      This may take 1–3 minutes.
+              <div className="deep-loading">
+                <span className="spin spin-amber" />
+                <div className="deep-loading-title">Deep Search Running...</div>
+                <div className="deep-loading-sub">
+                  Re-scraping GeM with cascading golden filters.
+                  This may take 1–3 minutes.
+                </div>
+                <div className="deep-progress-bar">
+                  <div className="deep-progress-fill" />
+                </div>
+                <div style={{ fontSize: ".68rem", color: "var(--text4)", marginTop: ".5rem" }}>
+                  Exploring depths {deepRange.min} to {deepRange.max} golden filter combinations...
+                </div>
+              </div>
+            )}
+
+            {deepStatus === "error" && (
+              <div className="err-box" style={{ marginTop: "1rem" }}>
+                {deepError}
+                <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => handleDeepSearch(deepRange.min, deepRange.max)}
+                    style={{ flex: 1 }}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => setDeepStatus("idle")}
+                    style={{
+                      flex: 1,
+                      background: "rgba(255,255,255,0.05)",
+                      color: "var(--text2)",
+                      border: "1px solid var(--border)"
+                    }}
+                  >
+                    ← Back to Options
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {deepStatus === "done" && deepResults && (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.2rem" }}>
+                  <button
+                    onClick={() => setDeepStatus("idle")}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid var(--border)",
+                      color: "var(--text2)",
+                      padding: "6px 12px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: ".75rem",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      transition: "all 0.2s"
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.borderColor = "var(--primary)"}
+                    onMouseOut={(e) => e.currentTarget.style.borderColor = "var(--border)"}
+                  >
+                    <span>←</span> Back to Deep Search Options
+                  </button>
+
+                  <button
+                    onClick={exportToPDF}
+                    style={{
+                      background: "rgba(108, 92, 231, 0.15)",
+                      border: "1px solid var(--primary)",
+                      color: "var(--text)",
+                      padding: "6px 14px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: ".75rem",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontWeight: 600,
+                      transition: "all 0.2s"
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.25)"}
+                    onMouseOut={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.15)"}
+                  >
+                    Export as PDF 📄
+                  </button>
+                </div>
+                <div className="deep-summary-row">
+                  <div className="deep-stat">
+                    <div className="deep-stat-val">{deepResults.combinations?.length ?? 0}</div>
+                    <div className="deep-stat-lbl">L1 Combos Found</div>
+                  </div>
+                  <div className="deep-stat">
+                    <div className="deep-stat-val">{deepResults.totalScraped ?? 0}</div>
+                    <div className="deep-stat-lbl">Re-Scrapes Done</div>
+                  </div>
+                  <div className="deep-stat">
+                    <div className="deep-stat-val">{deepResults.goldenFilterCount ?? 0}</div>
+                    <div className="deep-stat-lbl">Golden Filters</div>
+                  </div>
+                  {deepResults.truncated && (
+                    <div className="deep-stat deep-stat-warn">
+                      <div className="deep-stat-val">⚡</div>
+                      <div className="deep-stat-lbl">Search capped at 120 calls</div>
                     </div>
-                    <div className="deep-progress-bar">
-                      <div className="deep-progress-fill" />
+                  )}
+                </div>
+
+                {deepRange.max <= 10 && (
+                  <div style={{
+                    background: "rgba(156, 39, 176, 0.08)",
+                    border: "1px dashed rgba(156, 39, 176, 0.3)",
+                    borderRadius: "8px",
+                    padding: "0.8rem 1rem",
+                    marginBottom: "1.5rem",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "1rem",
+                    flexWrap: "wrap"
+                  }}>
+                    <div style={{ fontSize: ".8rem", color: "var(--text2)" }}>
+                      <strong style={{ color: "#9c27b0" }}>💡 Explore further?</strong> Standard search stopped at depth 10. Run an ultra-deep scan to find extreme combinations (11 to 15 filters).
                     </div>
-                    <div style={{ fontSize: ".68rem", color: "var(--text4)", marginTop: ".5rem" }}>
-                      Exploring depths {deepRange.min} to {deepRange.max} golden filter combinations...
-                    </div>
+                    <button
+                      onClick={() => handleDeepSearch(11, 15)}
+                      style={{
+                        background: "linear-gradient(135deg, var(--primary), #9c27b0)",
+                        border: "none", color: "#fff", fontSize: ".75rem", fontWeight: "bold",
+                        padding: "6px 14px", borderRadius: "6px", cursor: "pointer", boxShadow: "0 2px 6px rgba(0,0,0,0.2)"
+                      }}
+                    >
+                      ⚡ Scan Depths 11 - 15
+                    </button>
                   </div>
                 )}
 
-                {deepStatus === "error" && (
-                  <div className="err-box" style={{ marginTop: "1rem" }}>
-                    {deepError}
-                    <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
-                      <button
-                        className="btn btn-deep"
-                        onClick={() => handleDeepSearch(deepRange.min, deepRange.max)}
-                        style={{ flex: 1 }}
-                      >
-                        Retry
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => setDeepStatus("idle")}
-                        style={{ 
-                          flex: 1, 
-                          background: "rgba(255,255,255,0.05)", 
-                          color: "var(--text2)",
-                          border: "1px solid var(--border)"
-                        }}
-                      >
-                        ← Back to Options
-                      </button>
+                {deepResults.combinations?.length === 0 ? (
+                  <div className="empty" style={{ marginTop: "1rem" }}>
+                    <div className="empty-icon">🔍</div>
+                    <div className="empty-text">
+                      No L1 niches found even with cascading golden filters.<br />
+                      <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
+                        Try lowering your price.
+                      </span>
                     </div>
                   </div>
-                )}
-
-                {deepStatus === "done" && deepResults && (
+                ) : (
                   <>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.2rem" }}>
-                      <button
-                        onClick={() => setDeepStatus("idle")}
-                        style={{
-                          background: "transparent",
-                          border: "1px solid var(--border)",
-                          color: "var(--text2)",
-                          padding: "6px 12px",
-                          borderRadius: "6px",
-                          cursor: "pointer",
-                          fontSize: ".75rem",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "6px",
-                          transition: "all 0.2s"
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.borderColor = "var(--primary)"}
-                        onMouseOut={(e) => e.currentTarget.style.borderColor = "var(--border)"}
-                      >
-                        <span>←</span> Back to Deep Search Options
-                      </button>
-
-                      <button
-                        onClick={exportToPDF}
-                        style={{
-                          background: "rgba(108, 92, 231, 0.15)",
-                          border: "1px solid var(--primary)",
-                          color: "var(--text)",
-                          padding: "6px 14px",
-                          borderRadius: "6px",
-                          cursor: "pointer",
-                          fontSize: ".75rem",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "6px",
-                          fontWeight: 600,
-                          transition: "all 0.2s"
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.25)"}
-                        onMouseOut={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.15)"}
-                      >
-                        Export as PDF 📄
-                      </button>
+                    <div style={{ fontSize: ".72rem", color: "var(--text3)", marginBottom: "1rem" }}>
+                      Found <strong>{deepResults.combinations.length}</strong> L1 winning combinations
+                      via live re-scraping — sorted by opportunity score:
                     </div>
-                    <div className="deep-summary-row">
-                      <div className="deep-stat">
-                        <div className="deep-stat-val">{deepResults.combinations?.length ?? 0}</div>
-                        <div className="deep-stat-lbl">L1 Combos Found</div>
+                    {(() => {
+                      const depths = [...new Set(deepResults.combinations.map(c => c.depth))].sort((a, b) => a - b);
+                      const activeDepth = deepDepthTab !== null && depths.includes(deepDepthTab)
+                        ? deepDepthTab
+                        : depths[0];
+                      const group = deepResults.combinations.filter(c => c.depth === activeDepth);
+                      return (
+                        <>
+                          {/* Depth Tab Bar */}
+                          <div className="depth-tab-bar">
+                            {depths.map(d => {
+                              const cnt = deepResults.combinations.filter(c => c.depth === d).length;
+                              const isActive = d === activeDepth;
+                              return (
+                                <button
+                                  key={d}
+                                  className={`depth-tab-btn${isActive ? " depth-tab-active" : ""}`}
+                                  onClick={() => setDeepDepthTab(d)}
+                                >
+                                  <span className="depth-tab-label">Depth {d}</span>
+                                  <span className="depth-tab-count">{cnt}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Tab description */}
+                          <div className="depth-tab-desc">
+                            <span className="depth-badge">Depth {activeDepth}</span>
+                            &nbsp;— {activeDepth} golden filter{activeDepth > 1 ? "s" : ""} applied
+                            &nbsp;·&nbsp; <strong>{group.length}</strong> winning niche{group.length !== 1 ? "s" : ""}
+                          </div>
+
+                          {/* Combo cards for active depth */}
+                          {group.map((r, i) => (
+                            <OpportunityCard key={i} r={r} rank={i + 1} />
+                          ))}
+                        </>
+                      );
+                    })()}
+
+                    {/* Progress log toggle */}
+                    <details className="progress-log-details">
+                      <summary>View search log ({deepResults.progress?.length ?? 0} entries)</summary>
+                      <div className="progress-log">
+                        {(deepResults.progress ?? []).map((line, i) => (
+                          <div key={i} className={`log-line ${line.includes("✅") ? "log-win" :
+                            line.includes("Error") ? "log-err" :
+                              line.includes("[Done]") ? "log-done" :
+                                line.includes("deeper") ? "log-deeper" : ""
+                            }`}>
+                            {line}
+                          </div>
+                        ))}
                       </div>
-                      <div className="deep-stat">
-                        <div className="deep-stat-val">{deepResults.totalScraped ?? 0}</div>
-                        <div className="deep-stat-lbl">Re-Scrapes Done</div>
+                    </details>
+
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleDeepSearch}
+                      style={{ marginTop: "1.5rem" }}
+                    >
+                      🔄 Re-run Deep Search
+                    </button>
+
+                    <div className="surpass-card">
+                      <div className="surpass-title">
+                        <span>🎯</span> Targeted Elimination
                       </div>
-                      <div className="deep-stat">
-                        <div className="deep-stat-val">{deepResults.goldenFilterCount ?? 0}</div>
-                        <div className="deep-stat-lbl">Golden Filters</div>
+                      <div className="surpass-desc">
+                        Found a specific cheap competitor that's blocking you? Paste their product link below to find the exact filter that disqualifies them.
                       </div>
-                      {deepResults.truncated && (
-                        <div className="deep-stat deep-stat-warn">
-                          <div className="deep-stat-val">⚡</div>
-                          <div className="deep-stat-lbl">Search capped at 120 calls</div>
+                      <div className="surpass-input-group">
+                        <input
+                          type="text"
+                          placeholder="https://mkp.gem.gov.in/interactive-panels-with-cpu/p-..."
+                          value={surpassUrl}
+                          onChange={(e) => setSurpassUrl(e.target.value)}
+                        />
+                        <button
+                          className="btn btn-surpass"
+                          onClick={handleSurpass}
+                          disabled={surpassStatus === "loading" || !surpassUrl.trim()}
+                        >
+                          {surpassStatus === "loading" ? <span className="spin" /> : "Eliminate"}
+                        </button>
+                      </div>
+
+                      {surpassError && (
+                        <div className="err-box" style={{ marginTop: "0.5rem" }}>
+                          {surpassError}
+                        </div>
+                      )}
+
+                      {surpassResults && surpassResults.strategies && (
+                        <div style={{ marginTop: "1rem" }}>
+                          <div style={{ fontSize: ".7rem", color: "var(--text4)", fontWeight: 700, textTransform: "uppercase", marginBottom: "0.5rem" }}>
+                            Results for: {surpassResults.competitor?.name} (₹{surpassResults.competitor?.price?.toLocaleString()})
+                          </div>
+                          {surpassResults.strategies.length === 0 ? (
+                            <div className="warn-box">
+                              No single-step filters found to eliminate this competitor. They match all your golden filter options.
+                            </div>
+                          ) : (
+                            surpassResults.strategies.map((s, idx) => (
+                              <div key={idx} className="killer-card">
+                                <div className="killer-info">
+                                  <div className="killer-tag">Killer Filter</div>
+                                  <div className="killer-label">{s.label}</div>
+                                </div>
+                                <div className="killer-price">
+                                  <div className="killer-price-val">₹{(s.minCompetitorPrice || 0).toLocaleString()}</div>
+                                  <div className="killer-price-lbl">New Min Price</div>
+                                </div>
+                              </div>
+                            ))
+                          )}
                         </div>
                       )}
                     </div>
-                    
-                    {deepRange.max <= 10 && (
-                      <div style={{
-                        background: "rgba(156, 39, 176, 0.08)",
-                        border: "1px dashed rgba(156, 39, 176, 0.3)",
-                        borderRadius: "8px",
-                        padding: "0.8rem 1rem",
-                        marginBottom: "1.5rem",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: "1rem",
-                        flexWrap: "wrap"
-                      }}>
-                        <div style={{ fontSize: ".8rem", color: "var(--text2)" }}>
-                          <strong style={{ color: "#9c27b0" }}>💡 Explore further?</strong> Standard search stopped at depth 10. Run an ultra-deep scan to find extreme combinations (11 to 15 filters).
-                        </div>
-                        <button 
-                          onClick={() => handleDeepSearch(11, 15)}
-                          style={{
-                            background: "linear-gradient(135deg, var(--primary), #9c27b0)",
-                            border: "none", color: "#fff", fontSize: ".75rem", fontWeight: "bold",
-                            padding: "6px 14px", borderRadius: "6px", cursor: "pointer", boxShadow: "0 2px 6px rgba(0,0,0,0.2)"
-                          }}
-                        >
-                          ⚡ Scan Depths 11 - 15
-                        </button>
-                      </div>
-                    )}
-
-                    {deepResults.combinations?.length === 0 ? (
-                      <div className="empty" style={{ marginTop: "1rem" }}>
-                        <div className="empty-icon">🔍</div>
-                        <div className="empty-text">
-                          No L1 niches found even with cascading golden filters.<br />
-                          <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
-                            Try lowering your price.
-                          </span>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div style={{ fontSize: ".72rem", color: "var(--text3)", marginBottom: "1rem" }}>
-                          Found <strong>{deepResults.combinations.length}</strong> L1 winning combinations
-                          via live re-scraping — sorted by opportunity score:
-                        </div>
-                        {(() => {
-                          const depths = [...new Set(deepResults.combinations.map(c => c.depth))].sort((a, b) => a - b);
-                          const activeDepth = deepDepthTab !== null && depths.includes(deepDepthTab)
-                            ? deepDepthTab
-                            : depths[0];
-                          const group = deepResults.combinations.filter(c => c.depth === activeDepth);
-                          return (
-                            <>
-                              {/* Depth Tab Bar */}
-                              <div className="depth-tab-bar">
-                                {depths.map(d => {
-                                  const cnt = deepResults.combinations.filter(c => c.depth === d).length;
-                                  const isActive = d === activeDepth;
-                                  return (
-                                    <button
-                                      key={d}
-                                      className={`depth-tab-btn${isActive ? " depth-tab-active" : ""}`}
-                                      onClick={() => setDeepDepthTab(d)}
-                                    >
-                                      <span className="depth-tab-label">Depth {d}</span>
-                                      <span className="depth-tab-count">{cnt}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-
-                              {/* Tab description */}
-                              <div className="depth-tab-desc">
-                                <span className="depth-badge">Depth {activeDepth}</span>
-                                &nbsp;— {activeDepth} golden filter{activeDepth > 1 ? "s" : ""} applied
-                                &nbsp;·&nbsp; <strong>{group.length}</strong> winning niche{group.length !== 1 ? "s" : ""}
-                              </div>
-
-                              {/* Combo cards for active depth */}
-                              {group.map((r, i) => (
-                                <OpportunityCard key={i} r={r} rank={i + 1} />
-                              ))}
-                            </>
-                          );
-                        })()}
-
-                        {/* Progress log toggle */}
-                        <details className="progress-log-details">
-                          <summary>View search log ({deepResults.progress?.length ?? 0} entries)</summary>
-                          <div className="progress-log">
-                            {(deepResults.progress ?? []).map((line, i) => (
-                              <div key={i} className={`log-line ${line.includes("✅") ? "log-win" :
-                                  line.includes("Error") ? "log-err" :
-                                    line.includes("[Done]") ? "log-done" :
-                                      line.includes("deeper") ? "log-deeper" : ""
-                                }`}>
-                                {line}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-
-                        <button
-                          className="btn btn-deep"
-                          onClick={handleDeepSearch}
-                          style={{ marginTop: "1.5rem" }}
-                        >
-                          🔄 Re-run Deep Search
-                        </button>
-                      </>
-                    )}
                   </>
                 )}
-              </div>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
-    );
+      )}
+    </div>
+  );
 }

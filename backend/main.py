@@ -66,6 +66,14 @@ class FindL1Request(BaseModel):
     mandatory_filters: Optional[list] = []
 
 
+class SurpassRequest(BaseModel):
+    category_url: str
+    competitor_url: str
+    seller_price: int
+    golden_filters: list
+    location: Optional[str] = ""
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -363,6 +371,23 @@ def _analyze(products: list, seller_price: int, seller_specs: dict, filters: lis
         })
 
     return sorted(results, key=lambda r: r["score"], reverse=True)
+
+
+@app.post("/surpass")
+def surpass_competitor(req: SurpassRequest):
+    try:
+        scraper = GeMScraper()
+        result = scraper.surpass_competitor(
+            category_url=req.category_url,
+            competitor_url=req.competitor_url,
+            seller_price=req.seller_price,
+            golden_filters=req.golden_filters,
+            location=req.location or ""
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Surpass failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── PRODUCTION STATIC FILE MOUNT ───────────────────────────────────────────────

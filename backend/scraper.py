@@ -430,6 +430,91 @@ class GeMScraper:
             "goldenFilterCount": len(golden_filters),
         }
 
+    def surpass_competitor(self, category_url: str, competitor_url: str, seller_price: int, golden_filters: list, location: str = "") -> dict:
+        """
+        Surgical elimination: scrapes a specific competitor and finds filters they DON'T match.
+        """
+        competitor_url = competitor_url.strip()
+        # 1. Scrape the competitor
+        try:
+            # We don't have the variant_id easily, so we just use the URL
+            html = self._fetch(competitor_url)
+            soup = BeautifulSoup(html, "html.parser")
+            
+            comp_price = 0
+            for sel in [".final-price", ".offer_price", ".our_price"]:
+                el = soup.select_one(sel)
+                if el:
+                    comp_price = self._parse_price(el.get_text(strip=True))
+                    if comp_price: break
+            
+            comp_name = ""
+            h1 = soup.select_one("h1")
+            if h1: comp_name = h1.get_text(strip=True)[:100]
+
+            comp_specs_raw = self._extract_specs_from_page(soup)
+            
+            # Map raw spec names to filter keys
+            name_to_code = {fd["filterName"]: fd["filterKey"] for fd in golden_filters}
+            comp_specs = {}
+            for sname, sval in comp_specs_raw.items():
+                code = name_to_code.get(sname)
+                if not code:
+                    for fname, fcode in name_to_code.items():
+                        if self._names_match(sname, fname):
+                            code = fcode
+                            break
+                if code: comp_specs[code] = sval
+        except Exception as e:
+            return {"error": f"Failed to scrape competitor: {str(e)}"}
+
+        # 2. Find disqualifying filters
+        category_url, base_extra = self._normalize_url(category_url)
+        winning_strategies = []
+
+        for gf in golden_filters:
+            code = gf["filterKey"]
+            comp_val = comp_specs.get(code)
+            
+            # All available values in the category for this filter
+            available_vals = gf.get("values", [])
+            
+            # Values that DISQUALIFY this competitor
+            # (Note: on GeM, selecting a value that doesn't match the competitor excludes them)
+            killers = [v for v in available_vals if v != comp_val]
+            
+            for kv in killers:
+                # Test this strategy
+                extra = dict(base_extra) if base_extra else {}
+                extra[code] = kv
+                
+                try:
+                    res = self._fast_price_scrape(category_url, extra, location, seller_price=seller_price)
+                    if res["min_price"] is None or res["min_price"] > seller_price:
+                        # Success! This filter kills the target and makes us L1
+                        winning_strategies.append({
+                            "filterName": gf["filterName"],
+                            "filterKey": code,
+                            "value": kv,
+                            "minCompetitorPrice": res["min_price"],
+                            "competitorCount": res["product_count"],
+                            "label": f"{gf['filterName']}: {kv}"
+                        })
+                        # Stop after finding 5 winning strategies for UI clarity
+                        if len(winning_strategies) >= 5: break
+                except:
+                    continue
+            if len(winning_strategies) >= 5: break
+
+        return {
+            "competitor": {
+                "name": comp_name,
+                "price": comp_price,
+                "url": competitor_url
+            },
+            "strategies": winning_strategies
+        }
+
     # ── FAST PRICE SCRAPE (no enrichment) ────────────────────────────────────
 
     def _fast_price_scrape(self, url: str, extra_params: dict, location: str, seller_price: int = None) -> dict:
