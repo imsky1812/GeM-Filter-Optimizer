@@ -81,11 +81,11 @@ class GeMScraper:
     ]
 
     # Configuration
-    MAX_JSON_PAGES = 2000         # Fetch up to 2000 pages (covers ~24,000 products)
+    MAX_JSON_PAGES = 2000        # Fetch up to 2000 pages (covers ~24,000 products)
     MAX_ENRICH = 20              # Enrich max 20 products for missing specs
     ENRICH_WORKERS = 20          # Parallel workers for spec fetching
     MAX_FILTERS = 10             # Max non-golden filters to return (all golden filters always returned)
-    MAX_COMBO_DEPTH = 10          # Explore golden filter combos up to 10 levels deep
+    MAX_COMBO_DEPTH = 10         # Explore golden filter combos up to 10 levels deep
     MAX_API_CALLS = 500          # Safety ceiling: stop exploration after this many re-scrapes
 
     def __init__(self):
@@ -303,19 +303,18 @@ class GeMScraper:
             if not available:
                 return
 
-            # In Tunnel Mode, we pick ONE available filter at each level to force 
-            # linear depth discovery rather than exploding horizontally.
-            target_filters = available[:1] if tunnel_mode else available
+            # Always pick ONE filter at each level to force vertical exploration 
+            # instead of horizontally exploding across 30+ golden filters.
+            target_filters = available[:1]
 
+            results_at_this_level = []
             for gf in target_filters:
                 if api_calls[0] >= max_api_calls:
                     truncated[0] = True
                     return
 
-                vals = gf.get("values", [])
-                if tunnel_mode:
-                    # Take top 3 values only to force vertical exploration
-                    vals = vals[:3]
+                # Try top 3 values for the chosen filter
+                vals = gf.get("values", [])[:3]
 
                 for val in vals:
                     if api_calls[0] >= max_api_calls:
@@ -351,7 +350,6 @@ class GeMScraper:
                         if memo_key in scrape_memo:
                             result = scrape_memo[memo_key]
                         else:
-                            # Fast scrape: only listing pages, zero enrichment
                             result = self._fast_price_scrape(url, extra, location, seller_price=seller_price)
                             api_calls[0] += 1
                             scrape_memo[memo_key] = result
@@ -360,68 +358,59 @@ class GeMScraper:
                         total_in_niche = result["total"]
                         n_products    = result["product_count"]
 
-                        # ── Untapped niche (zero products in this niche) ──────
-                        if n_products == 0 and total_in_niche == 0:
-                            combinations.append({
-                                "combo":             new_applied,
-                                "label":             combo_label,
-                                "competitorCount":   0,
-                                "minCompetitorPrice": None,
-                                "sellerPrice":       seller_price,
-                                "priceGap":          0,
-                                "isUntapped":        True,
-                                "hasGolden":         True,
-                                "status":            "WIN",
-                                "competitors":       [],
-                                "depth":             depth,
-                                "totalInNiche":      0,
-                            })
-                            progress_log.append(
-                                f"  ✅ UNTAPPED (depth {depth}): {combo_label}"
-                            )
-                            continue  # can't go deeper — no products to narrow
+                        is_win = False
+                        if (n_products == 0 and total_in_niche == 0) or (min_price is not None and seller_price < min_price):
+                            is_win = True
 
-                        if min_price is None:
-                            # Could not determine price — go deeper anyway
-                            if depth < max_depth:
-                                explore(new_applied, depth + 1)
-                            continue
-
-                        if seller_price < min_price:
-                            # ── L1 WIN ───────────────────────────────────────
-                            price_gap = min_price - seller_price
+                        if is_win:
                             combinations.append({
                                 "combo":             new_applied,
                                 "label":             combo_label,
                                 "competitorCount":   n_products,
                                 "minCompetitorPrice": min_price,
                                 "sellerPrice":       seller_price,
-                                "priceGap":          price_gap,
-                                "isUntapped":        False,
+                                "priceGap":          (min_price - seller_price) if min_price else 0,
+                                "isUntapped":        n_products == 0,
                                 "hasGolden":         True,
                                 "status":            "WIN",
                                 "competitors":       [],
                                 "depth":             depth,
                                 "totalInNiche":      total_in_niche,
                             })
-                            progress_log.append(
-                                f"  ✅ L1 WIN depth {depth}: gap ₹{price_gap:,} "
-                                f"(min competitor ₹{min_price:,}, {n_products} products)"
-                            )
-                            # Still go deeper — more filters = more specific/defensible niche
-                            if depth < max_depth:
-                                explore(new_applied, depth + 1)
-
+                            progress_log.append(f"  ✅ WIN (depth {depth}): {combo_label}")
                         else:
-                            progress_log.append(
-                                f"  ✗ depth {depth}: min ₹{min_price:,} < ₹{seller_price:,} — going deeper"
-                            )
-                            if depth < max_depth:
-                                explore(new_applied, depth + 1)
+                            progress_log.append(f"  ✗ depth {depth}: min ₹{min_price or 0:,} < ₹{seller_price:,}")
+
+                        # Track results to pick the best path for recursion
+                        results_at_this_level.append({
+                            "applied": new_applied,
+                            "min_price": min_price or 0,
+                            "n_products": n_products,
+                            "is_win": is_win
+                        })
 
                     except Exception as e:
                         progress_log.append(f"  Error: {str(e)[:100]}")
                         continue
+
+            # ── Recursion Logic ───────────────────────────────────────────────
+            if depth < max_depth and results_at_this_level:
+                # We branch broadly only at the start (depth 1 and 2).
+                # Beyond that, we only follow the single BEST path to reach high depths (11-15).
+                branch_limit = 2
+                
+                if depth <= branch_limit:
+                    # Branch mode: go deeper on all viable paths
+                    for r in results_at_this_level:
+                        if r["n_products"] > 0:
+                            explore(r["applied"], depth + 1)
+                else:
+                    # Greedy mode: only follow the most promising path (highest min price)
+                    viable = [r for r in results_at_this_level if r["n_products"] > 0]
+                    if viable:
+                        best = max(viable, key=lambda x: x["min_price"])
+                        explore(best["applied"], depth + 1)
+
 
         progress_log.append(f"[Cascade] Exploring up to depth {max_depth}...")
         
