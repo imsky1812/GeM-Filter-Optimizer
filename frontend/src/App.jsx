@@ -425,38 +425,24 @@ export default function App() {
         {scrapeStatus === "loading" && (
           <div className="loading">
             <span className="spin spin-muted" />
-            Fetching products · Extracting specs · Building filters...
+            Initializing Category · Extracting Golden Filters...
             <br />
             <span style={{ fontSize: ".7rem", color: "var(--text4)" }}>
-              Scanning all products in category (unlimited pages)
+              Fetching base definitions from GeM
             </span>
           </div>
         )}
         {scrapeError && <div className="err-box">{scrapeError}</div>}
         {scrapeStatus === "done" && scrapedData && (
           <div className="info-box">
-            ✓ Loaded{" "}
-            <strong>{scrapedData.products.length} products</strong> with{" "}
-            <strong>{scrapedData.filters.length} filters</strong>
+            ✓ Initialized Category: Found{" "}
+            <strong>{scrapedData.filters.length} Golden Filters</strong>
             {scrapedData.location && scrapedData.location !== "All India" && (
               <span className="loc-badge">📍 {scrapedData.location}</span>
             )}
-            {scrapedData.totalResults > scrapedData.productCount && (
-              <span>
-                {" "}
-                (out of {scrapedData.totalResults} in this category)
-              </span>
-            )}
-            <span
-              style={{
-                marginLeft: 8,
-                fontFamily: "var(--mono)",
-                fontSize: ".65rem",
-                color: "var(--text3)",
-              }}
-            >
-              Price range: ₹{minCatPrice.toLocaleString()} – ₹
-              {maxCatPrice.toLocaleString()}
+            <span>
+              {" "}
+              ({scrapedData.totalResults.toLocaleString()} total products available in category)
             </span>
           </div>
         )}
@@ -647,13 +633,6 @@ export default function App() {
               )}
             </div>
           </div>
-          {priceNum > 0 && priceNum >= maxCatPrice && (
-            <div className="warn-box" style={{ marginTop: ".75rem" }}>
-              ⚠ Your price ₹{priceNum.toLocaleString()} is above all{" "}
-              {scrapedData.products.length} products in this category.
-              Lower your price to find L1 opportunities.
-            </div>
-          )}
         </div>
       )}
 
