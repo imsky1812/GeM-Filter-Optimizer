@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import "./index.css";
 
 const BACKEND_URL = "/api";
@@ -349,6 +351,55 @@ export default function App() {
     }
   };
 
+  const exportToPDF = () => {
+    if (!deepResults || !deepResults.combinations) return;
+    
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.width;
+    
+    doc.setFontSize(16);
+    doc.setTextColor(20, 20, 30);
+    doc.text("GeM L1 Filter Combinations", 14, 20);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(100, 100, 100);
+    const splitUrl = doc.splitTextToSize(`Category URL: ${gemUrl}`, pageWidth - 28);
+    doc.text(splitUrl, 14, 28);
+    
+    doc.text(`Target Price: Rs ${priceNum.toLocaleString()}`, 14, 38 + (splitUrl.length - 1) * 4);
+
+    let currentY = 46 + (splitUrl.length - 1) * 4;
+
+    deepResults.combinations.forEach((comboData, idx) => {
+      doc.setFontSize(12);
+      doc.setTextColor(0, 0, 0);
+      const title = `Option ${idx + 1} (Score: ${comboData.score} | Competitors: ${comboData.competitorCount})`;
+      doc.text(title, 14, currentY);
+      
+      const tableData = comboData.combo.map(c => [
+        c.name || c.filterName || c.filterKey || "Filter",
+        c.value
+      ]);
+      
+      autoTable(doc, {
+        startY: currentY + 4,
+        head: [['Filter Name', 'Required Value']],
+        body: tableData,
+        theme: 'grid',
+        headStyles: { fillColor: [108, 92, 231] },
+        margin: { left: 14, right: 14 },
+      });
+      
+      currentY = doc.lastAutoTable.finalY + 12;
+      
+      if (currentY > doc.internal.pageSize.height - 20) {
+        doc.addPage();
+        currentY = 20;
+      }
+    });
+
+    doc.save("GeM_L1_Filters.pdf");
+  };
 
   // Price range info for the category
   const minCatPrice = scrapedData
@@ -688,7 +739,7 @@ export default function App() {
 
                 {deepStatus === "done" && deepResults && (
                   <>
-                    <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: "1.2rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.2rem" }}>
                       <button
                         onClick={() => setDeepStatus("idle")}
                         style={{
@@ -708,6 +759,28 @@ export default function App() {
                         onMouseOut={(e) => e.currentTarget.style.borderColor = "var(--border)"}
                       >
                         <span>←</span> Back to Deep Search Options
+                      </button>
+
+                      <button
+                        onClick={exportToPDF}
+                        style={{
+                          background: "rgba(108, 92, 231, 0.15)",
+                          border: "1px solid var(--primary)",
+                          color: "var(--text)",
+                          padding: "6px 14px",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                          fontSize: ".75rem",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          fontWeight: 600,
+                          transition: "all 0.2s"
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.25)"}
+                        onMouseOut={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.15)"}
+                      >
+                        Export as PDF 📄
                       </button>
                     </div>
                     <div className="deep-summary-row">
