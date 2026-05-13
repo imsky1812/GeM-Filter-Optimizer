@@ -658,7 +658,7 @@ export default function App() {
 
       {/* STEP 2: PRICE → AUTO-ANALYZE */}
       {scrapedData && (
-        <div className="card fade-in fade-in-d1">
+        <div className="card fade-in fade-in-d1" style={{ position: "relative", zIndex: 50 }}>
           <div className="card-hdr">
             <div className="step-num">02</div>
             <div>
@@ -750,17 +750,26 @@ export default function App() {
               <button 
                 className="btn" 
                 onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
-                style={{ background: "var(--surface1)", border: "1px solid var(--border)", fontSize: "0.8rem", padding: "6px 12px" }}
+                style={{ 
+                  background: isFilterDropdownOpen ? "rgba(156, 39, 176, 0.15)" : "var(--surface1)", 
+                  border: isFilterDropdownOpen ? "1px solid var(--primary)" : "1px solid var(--border)", 
+                  fontSize: "0.8rem", 
+                  padding: "8px 16px",
+                  borderRadius: "6px",
+                  color: isFilterDropdownOpen ? "var(--text1)" : "var(--text2)",
+                  transition: "all 0.2s ease"
+                }}
               >
-                + Add Required Spec {isFilterDropdownOpen ? "▲" : "▼"}
+                + Add Required Spec <span style={{ marginLeft: "6px", fontSize: "0.7rem", opacity: 0.7 }}>{isFilterDropdownOpen ? "▲" : "▼"}</span>
               </button>
 
               {isFilterDropdownOpen && scrapedData && (
                 <div style={{ 
-                  position: "absolute", top: "100%", left: 0, marginTop: "4px",
-                  background: "var(--surface1)", border: "1px solid var(--border)",
-                  borderRadius: "6px", boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-                  zIndex: 10, width: "300px", maxHeight: "300px", overflowY: "auto"
+                  position: "absolute", top: "100%", left: 0, marginTop: "8px",
+                  background: "rgba(20, 20, 30, 0.85)", backdropFilter: "blur(12px)",
+                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                  borderRadius: "8px", boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+                  zIndex: 999, width: "320px", maxHeight: "320px", overflowY: "auto"
                 }}>
                   {scrapedData.filters.filter(f => f.isGolden).map((filter) => {
                     const isHovered = hoveredFilterKey === filter.filterKey;
@@ -770,50 +779,68 @@ export default function App() {
                         onMouseEnter={() => setHoveredFilterKey(filter.filterKey)}
                         onMouseLeave={() => setHoveredFilterKey(null)}
                         style={{ 
-                          padding: "8px 12px", borderBottom: "1px solid var(--border)",
-                          background: isHovered ? "var(--surface2)" : "transparent",
+                          padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.05)",
+                          background: isHovered ? "rgba(156, 39, 176, 0.15)" : "transparent",
                           cursor: "pointer", position: "relative",
-                          display: "flex", justifyContent: "space-between", alignItems: "center"
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          transition: "background 0.1s"
                         }}
                       >
-                        <span style={{ fontSize: "0.8rem" }}>{filter.filterName}</span>
-                        <span style={{ fontSize: "0.8rem", color: "var(--text3)" }}>▶</span>
+                        <span style={{ fontSize: "0.85rem", color: isHovered ? "var(--text1)" : "var(--text2)" }}>{filter.filterName}</span>
+                        <span style={{ fontSize: "0.7rem", color: isHovered ? "var(--primary)" : "var(--text4)", transform: isHovered ? "translateX(2px)" : "none", transition: "transform 0.2s" }}>▶</span>
 
                         {/* Sub-menu for values */}
                         {isHovered && (
                           <div style={{
-                            position: "absolute", top: 0, left: "100%",
-                            background: "var(--surface1)", border: "1px solid var(--border)",
-                            borderRadius: "6px", boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-                            zIndex: 11, minWidth: "200px", maxHeight: "300px", overflowY: "auto"
+                            position: "absolute", top: "-1px", left: "100%", marginLeft: "4px",
+                            background: "rgba(25, 25, 35, 0.95)", backdropFilter: "blur(12px)",
+                            border: "1px solid rgba(156, 39, 176, 0.3)",
+                            borderRadius: "8px", boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+                            zIndex: 1000, minWidth: "220px", maxHeight: "320px", overflowY: "auto"
                           }}>
-                            {filter.values.map(val => (
-                              <div 
-                                key={val}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  // Check if already selected
-                                  if (!mandatoryFilters.some(mf => mf.filterKey === filter.filterKey && mf.value === val)) {
-                                    setMandatoryFilters(prev => [...prev, {
-                                      filterKey: filter.filterKey,
-                                      filterName: filter.filterName,
-                                      value: val,
-                                      isGolden: true
-                                    }]);
-                                  }
-                                  setIsFilterDropdownOpen(false);
-                                  setHoveredFilterKey(null);
-                                }}
-                                style={{
-                                  padding: "8px 12px", borderBottom: "1px solid var(--border)",
-                                  fontSize: "0.8rem", cursor: "pointer"
-                                }}
-                                onMouseEnter={(e) => e.currentTarget.style.background = "var(--surface2)"}
-                                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
-                              >
-                                {val}
-                              </div>
-                            ))}
+                            {filter.values.map(val => {
+                              const isSelected = mandatoryFilters.some(mf => mf.filterKey === filter.filterKey && mf.value === val);
+                              return (
+                                <div 
+                                  key={val}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (!isSelected) {
+                                      setMandatoryFilters(prev => [...prev, {
+                                        filterKey: filter.filterKey,
+                                        filterName: filter.filterName,
+                                        value: val,
+                                        isGolden: true
+                                      }]);
+                                    }
+                                    setIsFilterDropdownOpen(false);
+                                    setHoveredFilterKey(null);
+                                  }}
+                                  style={{
+                                    padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.05)",
+                                    fontSize: "0.85rem", cursor: isSelected ? "default" : "pointer",
+                                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                                    color: isSelected ? "var(--primary)" : "var(--text2)",
+                                    opacity: isSelected ? 0.7 : 1
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    if (!isSelected) {
+                                      e.currentTarget.style.background = "rgba(156, 39, 176, 0.2)";
+                                      e.currentTarget.style.color = "var(--text1)";
+                                    }
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    if (!isSelected) {
+                                      e.currentTarget.style.background = "transparent";
+                                      e.currentTarget.style.color = "var(--text2)";
+                                    }
+                                  }}
+                                >
+                                  <span>{val}</span>
+                                  {isSelected && <span style={{ fontSize: "0.8rem" }}>✓</span>}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
