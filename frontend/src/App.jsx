@@ -268,7 +268,6 @@ export default function App() {
     setScrapeStatus("loading");
     setScrapeError("");
     setScrapedData(null);
-    setResults(null);
     // Reset deep search when re-scraping
     setDeepStatus("idle");
     setDeepResults(null);
@@ -311,7 +310,6 @@ export default function App() {
     setDeepResults(null);
     setDeepError("");
     setDeepDepthTab(null);
-    setActiveTab("deep");
 
     let normalizedUrl = gemUrl.trim();
     if (!normalizedUrl.startsWith("http://") && !normalizedUrl.startsWith("https://")) {

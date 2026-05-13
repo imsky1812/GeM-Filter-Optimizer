@@ -82,7 +82,7 @@ class GeMScraper:
 
     # Configuration
     MAX_JSON_PAGES = 2000         # Fetch up to 2000 pages (covers ~24,000 products)
-    MAX_ENRICH = 1000            # Enrich up to 1000 products with full specs
+    MAX_ENRICH = 20              # Enrich max 20 products for missing specs
     ENRICH_WORKERS = 20          # Parallel workers for spec fetching
     MAX_FILTERS = 10             # Max non-golden filters to return (all golden filters always returned)
     MAX_COMBO_DEPTH = 10          # Explore golden filter combos up to 10 levels deep
@@ -688,7 +688,7 @@ class GeMScraper:
         catalogs1     = data1.get("catalogs", [])
         per_page      = max(len(catalogs1), 10)
         total_pages   = max(1, -(-total_results // per_page))  # ceiling div
-        total_pages   = min(total_pages, self.MAX_JSON_PAGES)
+        total_pages   = min(total_pages, 5)  # Cap initial scrape to 5 pages for extreme speed
 
         def parse_catalog(cat: dict) -> dict | None:
             price = int(cat.get("final_price", {}).get("value", 0))
