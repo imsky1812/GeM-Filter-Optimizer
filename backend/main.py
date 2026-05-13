@@ -63,6 +63,7 @@ class FindL1Request(BaseModel):
     max_depth: Optional[int] = None
     min_depth: Optional[int] = 3
     golden_filters: Optional[list] = []  # from initial /scrape response
+    mandatory_filters: Optional[list] = []
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -211,6 +212,7 @@ def find_l1(req: FindL1Request):
             location=req.location or "",
             max_depth=req.max_depth,  # None = dynamic (= number of golden filters)
             min_depth=req.min_depth,
+            mandatory_filters=req.mandatory_filters,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Deep search failed: {e}")

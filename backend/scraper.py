@@ -221,10 +221,11 @@ class GeMScraper:
         self,
         url: str,
         seller_price: int,
-        golden_filters: list,          # already scraped golden filters with values
+        golden_filters: list,
         location: str = "",
         max_depth: int = None,
         min_depth: int = 3,
+        mandatory_filters: list = None,
         max_api_calls: int = None,
     ) -> dict:
         """
@@ -423,7 +424,10 @@ class GeMScraper:
                         continue
 
         progress_log.append(f"[Cascade] Exploring up to depth {max_depth}...")
-        explore([], 1)
+        
+        start_applied = mandatory_filters or []
+        start_depth = len(start_applied) + 1
+        explore(start_applied, start_depth)
 
         # ── Score and sort: deepest first, then largest price gap ─────────────
         for c in combinations:
