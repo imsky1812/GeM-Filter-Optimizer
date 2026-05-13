@@ -6,156 +6,6 @@ const BACKEND_URL = "/api";
 
 // ─── ANALYSIS ENGINE ──────────────────────────────────────────────────────────
 
-// Dynamically reconstruct GeM's internal taxonomy dependencies
-function detectDependencies(products, filters) {
-  const rules = [];
-  if (!products || products.length < 5) return rules;
-
-  for (let i = 0; i < filters.length; i++) {
-    for (let j = 0; j < filters.length; j++) {
-      if (i === j) continue;
-
-      const f1 = filters[i];
-      const f2 = filters[j];
-      const observations = {};
-      let totalObserved = 0;
-
-      for (const p of products) {
-        const v1 = String(p.specs[f1.filterKey] || "").toLowerCase();
-        const v2 = String(p.specs[f2.filterKey] || "").toLowerCase();
-
-        if (v1 && v2) {
-          if (!observations[v1]) observations[v1] = new Set();
-          observations[v1].add(v2);
-          totalObserved++;
-        }
-      }
-
-      // Need enough representative data to infer a hard taxonomy rule
-      if (totalObserved < 10) continue;
-
-      let strictlyDetermines = true;
-      for (const v2Set of Object.values(observations)) {
-        if (v2Set.size > 1) {
-          strictlyDetermines = false;
-          break;
-        }
-      }
-
-      if (strictlyDetermines) {
-        const mapping = {};
-        for (const [v1, v2Set] of Object.entries(observations)) {
-          mapping[v1] = Array.from(v2Set)[0];
-        }
-        rules.push({
-          detKey: f1.filterKey,
-          depKey: f2.filterKey,
-          mapping: mapping
-        });
-      }
-    }
-  }
-  return rules;
-}
-
-// Find all filter combinations where seller's price is the lowest (L1)
-function findL1Opportunities(products, sellerPrice, filters) {
-  const results = [];
-  const combos = [];
-
-  // Generate all 1-filter and 2-filter combos
-  for (let i = 0; i < filters.length; i++) {
-    const f1 = filters[i];
-    for (const v1 of f1.values) {
-      combos.push([{ key: f1.filterKey, name: f1.filterName, value: v1, isGolden: f1.isGolden }]);
-    }
-    for (let j = i + 1; j < filters.length; j++) {
-      const f2 = filters[j];
-      for (const v1 of f1.values) {
-        for (const v2 of f2.values) {
-          combos.push([
-            { key: f1.filterKey, name: f1.filterName, value: v1, isGolden: f1.isGolden },
-            { key: f2.filterKey, name: f2.filterName, value: v2, isGolden: f2.isGolden },
-          ]);
-        }
-      }
-    }
-  }
-
-  const rules = detectDependencies(products, filters);
-  const validCombos = [];
-
-  for (const combo of combos) {
-    let isContradictory = false;
-    for (let i = 0; i < combo.length; i++) {
-      for (let j = 0; j < combo.length; j++) {
-        if (i === j) continue;
-        const c1 = combo[i];
-        const c2 = combo[j];
-
-        const rule = rules.find(r => r.detKey === c1.key && r.depKey === c2.key);
-        if (rule) {
-          const expectedV2 = rule.mapping[c1.value.toLowerCase()];
-          if (expectedV2 && expectedV2 !== c2.value.toLowerCase()) {
-            isContradictory = true;
-            break;
-          }
-        }
-      }
-      if (isContradictory) break;
-    }
-    if (!isContradictory) {
-      validCombos.push(combo);
-    }
-  }
-
-  const maxGap = sellerPrice * 0.8 || 1;
-
-  for (const combo of validCombos) {
-    // Find products matching this filter combo
-    const matching = products.filter((p) =>
-      combo.every(
-        (c) =>
-          String(p.specs[c.key] || "").toLowerCase() === c.value.toLowerCase()
-      )
-    );
-
-    const isUntapped = matching.length === 0;
-    const minCompPrice = isUntapped ? Infinity : Math.min(...matching.map((p) => p.price));
-
-    // Only include combos where seller IS the cheapest (L1)
-    if (minCompPrice <= sellerPrice) continue;
-
-    const priceGap = isUntapped ? sellerPrice * 0.5 : minCompPrice - sellerPrice;
-    const gapScore = isUntapped ? 100 : Math.min(priceGap / maxGap, 1) * 100;
-    const scarcityScore = Math.max(1 - matching.length / 10, 0) * 100;
-    const trafficScore = isUntapped ? 80 : Math.min(matching.length / 5, 1) * 100;
-    const hasGolden = combo.some((c) => c.isGolden);
-
-    // Severely penalize score if combo does NOT include any Golden filters,
-    // because GeM calculates L1 strictly based on Golden parameters.
-    const rawScore = gapScore * 0.5 + scarcityScore * 0.3 + trafficScore * 0.2;
-    const score = isUntapped ? 100 : Math.round(hasGolden ? rawScore : rawScore * 0.3);
-
-    const competitors = matching.sort((a, b) => a.price - b.price).slice(0, 3);
-
-    results.push({
-      combo,
-      label: combo.map((c) => `${c.name}: ${c.value}`).join(" + "),
-      competitorCount: matching.length,
-      minCompetitorPrice: minCompPrice,
-      sellerPrice,
-      priceGap: isUntapped ? 0 : priceGap, // don't show arbitrary gap
-      score,
-      isSingle: combo.length === 1,
-      competitors,
-      isUntapped,
-      hasGolden
-    });
-  }
-
-  return results.sort((a, b) => b.score - a.score);
-}
 
 // ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
 const ChartTip = ({ active, payload }) => {
@@ -384,11 +234,8 @@ export default function App() {
   const [scrapedData, setScrapedData] = useState(null);
   const [scrapeStatus, setScrapeStatus] = useState("idle");
   const [scrapeError, setScrapeError] = useState("");
-  const [results, setResults] = useState(null);
-  const [activeTab, setActiveTab] = useState("single");
   const [locations, setLocations] = useState(["All India"]);
   const [selectedLocation, setSelectedLocation] = useState("All India");
-  const analyzeTimerRef = useRef(null);
   const handlePrintReport = () => window.print();
 
   // Deep Search state
@@ -415,36 +262,6 @@ export default function App() {
   }, []);
 
   const priceNum = parseInt(sellerPrice) || 0;
-
-  // Auto-analyze when price changes (debounced)
-  useEffect(() => {
-    if (analyzeTimerRef.current) clearTimeout(analyzeTimerRef.current);
-
-    if (!scrapedData || !priceNum) {
-      setResults(null);
-      return;
-    }
-
-    analyzeTimerRef.current = setTimeout(() => {
-      const all = findL1Opportunities(
-        scrapedData.products,
-        priceNum,
-        scrapedData.filters
-      );
-
-      const singles = all.filter((r) => r.isSingle);
-      const combos = all.filter((r) => !r.isSingle);
-      const bestGap =
-        all.length > 0
-          ? Math.max(...all.map((r) => r.priceGap))
-          : 0;
-
-      setResults({ all, singles, combos, bestGap });
-      setActiveTab(singles.length > 0 ? "single" : "combo");
-    }, 300);
-
-    return () => clearTimeout(analyzeTimerRef.current);
-  }, [priceNum, scrapedData]);
 
   const handleScrape = async () => {
     if (!gemUrl.trim()) return;
@@ -534,15 +351,6 @@ export default function App() {
     }
   };
 
-  const totalWins = results ? results.all.length : 0;
-  const chartList =
-    results && activeTab === "single" ? results.singles : results?.combos || [];
-  const chartData = chartList.slice(0, 12).map((r) => ({
-    label: r.combo.map((c) => c.value).join(" + "),
-    score: r.score,
-    priceGap: r.priceGap,
-    competitorCount: r.competitorCount,
-  }));
 
   // Price range info for the category
   const minCatPrice = scrapedData
@@ -664,8 +472,7 @@ export default function App() {
             <div>
               <div className="card-title">Your Product Price</div>
               <div className="card-desc">
-                Enter your selling price — we'll instantly show the best
-                filters for L1 ranking
+                Enter your selling price and launch Deep Search for guaranteed L1 ranking paths
               </div>
             </div>
           </div>
@@ -680,35 +487,27 @@ export default function App() {
                 id="price-input"
               />
             </div>
-            {priceNum > 0 && results && (
-              <div
-                style={{
-                  fontSize: ".75rem",
-                  color:
-                    totalWins > 0 ? "var(--green)" : "var(--text3)",
-                }}
-              >
-                {totalWins > 0 ? (
-                  <>
-                    🏆{" "}
-                    <strong>
-                      {totalWins} L1 opportunit
-                      {totalWins === 1 ? "y" : "ies"}
-                    </strong>{" "}
-                    found
-                  </>
-                ) : (
-                  <>
-                    No L1 positions at this price — try{" "}
-                    <strong>
-                      below ₹{minCatPrice.toLocaleString()}
-                    </strong>
-                  </>
-                )}
+            {priceNum > 0 && (
+              <div style={{ display: "flex", gap: "12px", marginLeft: "auto" }}>
+                <button
+                  className="btn btn-deep"
+                  onClick={() => handleDeepSearch(3, 10)}
+                  disabled={scrapeStatus !== "done"}
+                  style={{ padding: "8px 16px", fontSize: "0.85rem", background: "var(--primary)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", boxShadow: "0 4px 12px rgba(156, 39, 176, 0.3)" }}
+                >
+                  🔍 Standard Search (3-10)
+                </button>
+                <button
+                  className="btn btn-deep"
+                  onClick={() => handleDeepSearch(11, 15)}
+                  disabled={scrapeStatus !== "done"}
+                  style={{ padding: "8px 16px", fontSize: "0.85rem", background: "linear-gradient(135deg, var(--primary), #9c27b0)", border: "none", borderRadius: "6px", color: "white", cursor: "pointer", boxShadow: "0 4px 12px rgba(156, 39, 176, 0.3)" }}
+                >
+                  🚀 Ultra Deep Search (11-15)
+                </button>
               </div>
             )}
           </div>
-
           {/* Mandatory Filters Section - MOVED TO STEP 2 */}
           <div className="mandatory-filters-section" style={{ marginTop: "1.5rem", textAlign: "left", background: "var(--surface2)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--border)" }}>
             <div style={{ marginBottom: "0.5rem", fontWeight: "bold", fontSize: "0.9rem" }}>
@@ -860,196 +659,11 @@ export default function App() {
         </div>
       )}
 
-      {/* RESULTS */}
-      {results && totalWins > 0 && (
-        <>
-          {/* Stats */}
-          <div className="stats fade-in">
-            <div className="stat">
-              <div className="stat-lbl">Total L1 Wins</div>
-              <div className="stat-val g">{totalWins}</div>
-            </div>
-            <div className="stat">
-              <div className="stat-lbl">Single Filters</div>
-              <div className="stat-val g">{results.singles.length}</div>
-            </div>
-            <div className="stat">
-              <div className="stat-lbl">Filter Combos</div>
-              <div className="stat-val a">{results.combos.length}</div>
-            </div>
-            <div className="stat">
-              <div className="stat-lbl">Best Gap</div>
-              <div className="stat-val g">
-                ₹{results.bestGap.toLocaleString()}
-              </div>
-            </div>
-          </div>
-
-          {/* Results Card */}
-          <div className="card fade-in fade-in-d2">
-            <div className="results-hdr">
-              <div className="results-title">
-                🏆 Best Filters for L1 Rank
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                <div className="tally">
-                  <span className="tally-chip tally-green">
-                    {results.singles.length} single filters
-                  </span>
-                  <span className="tally-chip tally-amber">
-                    {results.combos.length} filter combos
-                  </span>
-                </div>
-                <button
-                  className="btn-sec"
-                  style={{ padding: "6px 12px", fontSize: ".7rem", display: "flex", alignItems: "center", gap: "6px", height: "28px", background: "var(--accent-glow)", color: "var(--accent2)", border: "1px solid rgba(108,92,231,.2)" }}
-                  onClick={handlePrintReport}
-                >
-                  <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z" /></svg>
-                  Export Report
-                </button>
-              </div>
-            </div>
-
-            <div className="tabs">
-              <button
-                className={`tab ${activeTab === "single" ? "on" : ""}`}
-                onClick={() => setActiveTab("single")}
-              >
-                🎯 Single Filters ({results.singles.length})
-              </button>
-              <button
-                className={`tab ${activeTab === "combo" ? "on" : ""}`}
-                onClick={() => setActiveTab("combo")}
-              >
-                🔗 Filter Combos ({results.combos.length})
-              </button>
-              <button
-                className={`tab ${activeTab === "chart" ? "on" : ""}`}
-                onClick={() => setActiveTab("chart")}
-              >
-                📊 Chart
-              </button>
-              <button
-                className={`tab tab-deep ${activeTab === "deep" ? "on" : ""}`}
-                onClick={() => setActiveTab("deep")}
-                id="deep-search-tab"
-              >
-                🔍 Deep Search
-              </button>
-            </div>
-
-            {activeTab === "single" &&
-              (results.singles.length === 0 ? (
-                <div className="empty">
-                  <div className="empty-icon">🎯</div>
-                  <div className="empty-text">
-                    No single-filter L1 positions. Check filter combos.
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div
-                    style={{
-                      fontSize: ".72rem",
-                      color: "var(--text3)",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    Set any <strong>one</strong> of these filter values on
-                    your GeM listing to rank L1 in that filtered view:
-                  </div>
-                  {results.singles.map((r, i) => (
-                    <OpportunityCard key={i} r={r} rank={i + 1} />
-                  ))}
-                </>
-              ))}
-
-            {activeTab === "combo" &&
-              (results.combos.length === 0 ? (
-                <div className="empty">
-                  <div className="empty-icon">🔗</div>
-                  <div className="empty-text">
-                    No combo-filter L1 positions found.
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div
-                    style={{
-                      fontSize: ".72rem",
-                      color: "var(--text3)",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    Set <strong>all</strong> filter values together for
-                    these L1 niches:
-                  </div>
-                  {results.combos.slice(0, 100).map((r, i) => (
-                    <OpportunityCard key={i} r={r} rank={i + 1} />
-                  ))}
-                  {results.combos.length > 100 && (
-                    <div
-                      style={{
-                        fontSize: ".72rem",
-                        color: "var(--text4)",
-                        textAlign: "center",
-                        padding: "1rem",
-                      }}
-                    >
-                      + {results.combos.length - 100} more combos
-                    </div>
-                  )}
-                </>
-              ))}
-
-            {activeTab === "deep" && (
-              <div className="deep-search-panel">
-                {deepStatus === "idle" && (
-                  <div className="deep-search-intro">
-                    <div className="deep-icon">🔍</div>
-                    <div className="deep-title">Cascading Golden Filter Search</div>
-                    <div className="deep-desc">
-                      Deep Search re-scrapes GeM <strong>live</strong> after each golden filter is applied,
-                      then picks the <em>next available</em> golden filter from the narrowed result —
-                      repeating up to <strong>10 levels</strong> until your price becomes L1.
-                      This finds combinations of <strong>3 to 10 golden filters</strong> that
-                      static analysis misses.
-                    </div>
-                    <div className="deep-warning">
-                      ⏱ This may take <strong>1–3 minutes</strong> depending on category size.
-                    </div>
-                    
-
-
-                    <div style={{ display: "flex", gap: "1rem", justifyContent: "center", flexWrap: "wrap" }}>
-                      <button
-                        className="btn btn-deep"
-                        onClick={() => handleDeepSearch(3, 10)}
-                        disabled={!priceNum || scrapeStatus !== "done"}
-                        style={{ flex: 1, minWidth: "200px" }}
-                      >
-                        🔍 Standard Search (3-10)
-                      </button>
-                      <button
-                        className="btn btn-deep"
-                        onClick={() => handleDeepSearch(11, 15)}
-                        disabled={!priceNum || scrapeStatus !== "done"}
-                        style={{ 
-                          flex: 1, 
-                          minWidth: "200px", 
-                          background: "linear-gradient(135deg, var(--primary), #9c27b0)",
-                          border: "none",
-                          boxShadow: "0 4px 12px rgba(156, 39, 176, 0.3)"
-                        }}
-                      >
-                        🚀 Ultra Deep Search (11-15)
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {deepStatus === "loading" && (
+      {/* DEEP SEARCH ACTIVE VIEW */}
+      {deepStatus !== "idle" && (
+        <div className="card fade-in fade-in-d2">
+          <div className="deep-search-panel">
+            {deepStatus === "loading" && (
                   <div className="deep-loading">
                     <span className="spin spin-amber" />
                     <div className="deep-loading-title">Deep Search Running...</div>
@@ -1252,125 +866,8 @@ export default function App() {
                   </>
                 )}
               </div>
-            )}
-
-            {activeTab === "chart" && (
-              <>
-                <div
-                  style={{
-                    fontSize: ".72rem",
-                    fontWeight: 600,
-                    color: "var(--text3)",
-                    marginBottom: ".5rem",
-                    fontFamily: "var(--mono)",
-                    textTransform: "uppercase",
-                    letterSpacing: ".06em",
-                  }}
-                >
-                  Viewing: Top {results.all.length} Opportunities
-                </div>
-                <div
-                  style={{
-                    fontSize: ".72rem",
-                    color: "var(--text4)",
-                    marginBottom: ".5rem",
-                  }}
-                >
-                  Opportunity score — higher means better L1 position
-                </div>
-                <div className="chart-wrap">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={results.all.slice(0, 12).map((r) => ({
-                        label: r.combo
-                          .map((c) => c.value)
-                          .join(" + "),
-                        score: r.score,
-                        priceGap: r.priceGap,
-                        competitorCount: r.competitorCount,
-                      }))}
-                      margin={{
-                        top: 5,
-                        right: 10,
-                        bottom: 70,
-                        left: 0,
-                      }}
-                    >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="rgba(255,255,255,.04)"
-                      />
-                      <XAxis
-                        dataKey="label"
-                        tick={{
-                          fontSize: 9,
-                          fontFamily: "var(--mono)",
-                          fill: "var(--text3)",
-                        }}
-                        angle={-40}
-                        textAnchor="end"
-                        interval={0}
-                      />
-                      <YAxis
-                        tick={{
-                          fontSize: 10,
-                          fontFamily: "var(--mono)",
-                          fill: "var(--text3)",
-                        }}
-                      />
-                      <Tooltip content={<ChartTip />} />
-                      <Bar dataKey="score" radius={[6, 6, 0, 0]}>
-                        {results.all.slice(0, 12).map((r, i) => (
-                          <Cell
-                            key={i}
-                            fill={
-                              r.isSingle
-                                ? "var(--green)"
-                                : "var(--amber)"
-                            }
-                            opacity={0.8}
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* No results state */}
-      {results && totalWins === 0 && priceNum > 0 && (
-        <div className="card">
-          <div className="empty">
-            <div className="empty-icon">💰</div>
-            <div className="empty-text">
-              No L1 filter positions at ₹{priceNum.toLocaleString()}.
-              <br />
-              The cheapest product in this category is{" "}
-              <strong>₹{minCatPrice.toLocaleString()}</strong>.
-              <br />
-              <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
-                Lower your price below the cheapest competitor in a filter niche.
-              </span>
             </div>
-            <button
-              className="btn btn-deep"
-              style={{ marginTop: "1.5rem" }}
-              onClick={() => {
-                setActiveTab("deep");
-                handleDeepSearch();
-              }}
-              disabled={deepStatus === "loading"}
-              id="try-deep-search-btn"
-            >
-              🔍 Try Deep Search — find 3+ golden filter combos
-            </button>
-          </div>
+          )}
         </div>
-      )}
-    </div>
-  );
+    );
 }
