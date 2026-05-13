@@ -547,39 +547,41 @@ export default function App() {
               </button>
 
               {isFilterDropdownOpen && scrapedData && (
-                <div style={{ 
+                <div className="custom-scrollbar" style={{ 
                   position: "absolute", top: "100%", left: 0, marginTop: "8px",
-                  background: "rgba(20, 20, 30, 0.85)", backdropFilter: "blur(12px)",
+                  background: "rgba(20, 20, 30, 0.95)", backdropFilter: "blur(12px)",
                   border: "1px solid rgba(255, 255, 255, 0.1)",
                   borderRadius: "8px", boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
-                  zIndex: 999, width: "320px", maxHeight: "320px", overflowY: "auto"
+                  zIndex: 999, width: "320px", maxHeight: "360px", overflowY: "auto", overflowX: "hidden"
                 }}>
                   {scrapedData.filters.filter(f => f.isGolden).map((filter) => {
                     const isHovered = hoveredFilterKey === filter.filterKey;
                     return (
-                      <div 
-                        key={filter.filterKey}
-                        onMouseEnter={() => setHoveredFilterKey(filter.filterKey)}
-                        onMouseLeave={() => setHoveredFilterKey(null)}
-                        style={{ 
-                          padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.05)",
-                          background: isHovered ? "rgba(156, 39, 176, 0.15)" : "transparent",
-                          cursor: "pointer", position: "relative",
-                          display: "flex", justifyContent: "space-between", alignItems: "center",
-                          transition: "background 0.1s"
-                        }}
-                      >
-                        <span style={{ fontSize: "0.85rem", color: isHovered ? "var(--text1)" : "var(--text2)" }}>{filter.filterName}</span>
-                        <span style={{ fontSize: "0.7rem", color: isHovered ? "var(--primary)" : "var(--text4)", transform: isHovered ? "translateX(2px)" : "none", transition: "transform 0.2s" }}>▶</span>
+                      <div key={filter.filterKey} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                        <div 
+                          onClick={() => setHoveredFilterKey(isHovered ? null : filter.filterKey)}
+                          style={{ 
+                            padding: "10px 16px",
+                            background: isHovered ? "rgba(156, 39, 176, 0.15)" : "transparent",
+                            cursor: "pointer",
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                            transition: "background 0.2s"
+                          }}
+                        >
+                          <span style={{ fontSize: "0.85rem", color: isHovered ? "var(--text1)" : "var(--text2)", fontWeight: isHovered ? 600 : 400 }}>
+                            {filter.filterName}
+                          </span>
+                          <span style={{ fontSize: "0.7rem", color: isHovered ? "var(--primary)" : "var(--text4)", transform: isHovered ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>
+                            ▶
+                          </span>
+                        </div>
 
-                        {/* Sub-menu for values */}
+                        {/* Accordion values list */}
                         {isHovered && (
-                          <div style={{
-                            position: "absolute", top: "-1px", left: "100%", marginLeft: "4px",
-                            background: "rgba(25, 25, 35, 0.95)", backdropFilter: "blur(12px)",
-                            border: "1px solid rgba(156, 39, 176, 0.3)",
-                            borderRadius: "8px", boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
-                            zIndex: 1000, minWidth: "220px", maxHeight: "320px", overflowY: "auto"
+                          <div className="custom-scrollbar" style={{
+                            background: "rgba(10, 10, 15, 0.6)",
+                            maxHeight: "220px", overflowY: "auto", overflowX: "hidden",
+                            borderTop: "1px solid rgba(255,255,255,0.02)"
                           }}>
                             {filter.values.map(val => {
                               const isSelected = mandatoryFilters.some(mf => mf.filterKey === filter.filterKey && mf.value === val);
@@ -600,8 +602,8 @@ export default function App() {
                                     setHoveredFilterKey(null);
                                   }}
                                   style={{
-                                    padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.05)",
-                                    fontSize: "0.85rem", cursor: isSelected ? "default" : "pointer",
+                                    padding: "8px 16px 8px 24px", borderBottom: "1px solid rgba(255,255,255,0.02)",
+                                    fontSize: "0.8rem", cursor: isSelected ? "default" : "pointer",
                                     display: "flex", justifyContent: "space-between", alignItems: "center",
                                     color: isSelected ? "var(--primary)" : "var(--text2)",
                                     opacity: isSelected ? 0.7 : 1
