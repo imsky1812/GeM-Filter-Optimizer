@@ -18,9 +18,10 @@ Stop manually checking thousands of permutations. Apply dynamic data science to 
 ## 💎 Key Features
 
 - 🕷️ **High-Volume Scaled Scraper**: Effortlessly ingest entire categories (10,000+ pages) via asynchronous multi-threaded payload fetching.
-- 🧠 **Deep Cascade Logic (Levels 3-10)**: Proprietary recursion tree traversal uncovers non-obvious, deeply nested niches where major brands are excluded.
-- 🛡️ **Anti-Throttling Core**: Self-healing query engine with linear retry back-off safeguards against portal firewalls and WAF limiters.
-- ⚡ **Ultra-Low Latency API**: Backend with integrated **GZip compression** middleware minimizes payload transit size for sub-second interactions.
+- 🎯 **Surgical Competitive Strike**: **New!** Paste any specific competitor's URL to analyze their specs. Instantly find a "Killer Filter" to **eliminate** cheaper competitors or a "Blueprint" to **join and undercut** high-priced premium niches.
+- 🧠 **Deep & Ultra-Deep Cascade (Levels 3-15)**: Proprietary recursion tree traversal uncovers non-obvious, deeply nested niches. Standard search covers depth 3-10, while Ultra-Deep mode pushes to depth 15 for extreme market isolation.
+- 🛡️ **Anti-Throttling Core**: Self-healing query engine with linear retry back-off and dynamic concurrency management safeguards against portal firewalls and WAF limiters.
+- ⚡ **Ultra-Low Latency API**: Backend with integrated **GZip compression** and smart caching minimizes payload transit size for sub-second interactions.
 - 📊 **Interactive Visualization**: Advanced React plotting for distribution density, pricing spectrums, and competitor opportunity matrices.
 - 📜 **Instant PDF Strategy Report**: Generate formatted, print-ready executive summaries that isolate exact actionable settings for product management teams.
 
