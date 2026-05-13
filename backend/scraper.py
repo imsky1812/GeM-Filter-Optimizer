@@ -303,10 +303,9 @@ class GeMScraper:
             if not available:
                 return
 
-            # AT THE ROOT (starting depth), try ALL available filters to find the best entry points.
-            # Beyond the root, pick ONE filter per level to keep the exploration vertical.
-            is_root = (depth == (len(mandatory_filters or []) + 1))
-            target_filters = available if is_root else available[:1]
+            # Pick ONE random filter to ensure each path explores a unique direction
+            random.shuffle(available)
+            target_filters = available[:1]
 
             results_at_this_level = []
             for gf in target_filters:
@@ -314,8 +313,8 @@ class GeMScraper:
                     truncated[0] = True
                     break
 
-                # Try top 3 values for each filter
-                vals = gf.get("values", [])[:3]
+                # Try top 2 values to keep branching extremely tight
+                vals = gf.get("values", [])[:2]
                 for val in vals:
                     if api_calls[0] >= max_api_calls:
                         truncated[0] = True
@@ -376,33 +375,27 @@ class GeMScraper:
                         results_at_this_level.append({
                             "applied": new_applied,
                             "min_price": min_price or 0,
-                            "n_products": n_products,
-                            "is_win": is_win
+                            "n_products": n_products
                         })
                     except: continue
 
-            # ── Recursion Logic ───────────────────────────────────────────────
+            # ── Recursion: Always go deeper until max_depth ───────────────────
             if depth < max_depth and results_at_this_level:
-                if is_root:
-                    # Root level: pick top 10 promising paths (highest min_price) to follow deep
-                    top_paths = sorted(results_at_this_level, key=lambda x: x["min_price"], reverse=True)[:10]
-                    for r in top_paths:
-                        if r["n_products"] > 0:
-                            explore(r["applied"], depth + 1)
-                else:
-                    # Deep levels: follow ONLY the single best path horizontally
-                    viable = [r for r in results_at_this_level if r["n_products"] > 0]
-                    if viable:
-                        best = max(viable, key=lambda x: x["min_price"])
-                        explore(best["applied"], depth + 1)
+                # Pick the best value from this level and continue vertically
+                best = max(results_at_this_level, key=lambda x: x["min_price"])
+                explore(best["applied"], depth + 1)
 
 
-
-        progress_log.append(f"[Cascade] Exploring up to depth {max_depth}...")
+        progress_log.append(f"[Cascade] Launching parallel vertical paths to depth {max_depth}...")
         
         start_applied = mandatory_filters or []
         start_depth = len(start_applied) + 1
-        explore(start_applied, start_depth)
+        
+        # Launch 16 independent vertical paths to ensure variety and depth coverage
+        for i in range(16):
+            if api_calls[0] >= max_api_calls: break
+            explore(start_applied, start_depth)
+
 
         # ── Score and sort: deepest first, then largest price gap ─────────────
         for c in combinations:
