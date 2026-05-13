@@ -303,23 +303,23 @@ class GeMScraper:
             if not available:
                 return
 
-            # Always pick ONE filter at each level to force vertical exploration 
-            # instead of horizontally exploding across 30+ golden filters.
-            target_filters = available[:1]
+            # AT THE ROOT (starting depth), try ALL available filters to find the best entry points.
+            # Beyond the root, pick ONE filter per level to keep the exploration vertical.
+            is_root = (depth == (len(mandatory_filters or []) + 1))
+            target_filters = available if is_root else available[:1]
 
             results_at_this_level = []
             for gf in target_filters:
                 if api_calls[0] >= max_api_calls:
                     truncated[0] = True
-                    return
+                    break
 
-                # Try top 3 values for the chosen filter
+                # Try top 3 values for each filter
                 vals = gf.get("values", [])[:3]
-
                 for val in vals:
                     if api_calls[0] >= max_api_calls:
                         truncated[0] = True
-                        return
+                        break
 
                     new_filter = {
                         "filterKey":  gf["filterKey"],
@@ -331,19 +331,14 @@ class GeMScraper:
 
                     # Dedup
                     sig = tuple(sorted((f["filterKey"], f["value"]) for f in new_applied))
-                    if sig in seen_combos:
-                        continue
+                    if sig in seen_combos: continue
                     seen_combos.add(sig)
 
-                    # Build filter params for this combo
+                    # Build filter params
                     extra = dict(base_extra) if base_extra else {}
-                    for af in new_applied:
-                        extra[af["filterKey"]] = af["value"]
+                    for af in new_applied: extra[af["filterKey"]] = af["value"]
 
-                    combo_label = " + ".join(
-                        f'{f["filterName"]}: {f["value"]}' for f in new_applied
-                    )
-
+                    combo_label = " + ".join(f'{f["filterName"]}: {f["value"]}' for f in new_applied)
                     memo_key = tuple(sorted(extra.items()))
 
                     try:
@@ -354,14 +349,11 @@ class GeMScraper:
                             api_calls[0] += 1
                             scrape_memo[memo_key] = result
 
-                        min_price     = result["min_price"]
+                        min_price      = result["min_price"]
                         total_in_niche = result["total"]
-                        n_products    = result["product_count"]
+                        n_products     = result["product_count"]
 
-                        is_win = False
-                        if (n_products == 0 and total_in_niche == 0) or (min_price is not None and seller_price < min_price):
-                            is_win = True
-
+                        is_win = (n_products == 0 and total_in_niche == 0) or (min_price is not None and seller_price < min_price)
                         if is_win:
                             combinations.append({
                                 "combo":             new_applied,
@@ -381,35 +373,29 @@ class GeMScraper:
                         else:
                             progress_log.append(f"  ✗ depth {depth}: min ₹{min_price or 0:,} < ₹{seller_price:,}")
 
-                        # Track results to pick the best path for recursion
                         results_at_this_level.append({
                             "applied": new_applied,
                             "min_price": min_price or 0,
                             "n_products": n_products,
                             "is_win": is_win
                         })
-
-                    except Exception as e:
-                        progress_log.append(f"  Error: {str(e)[:100]}")
-                        continue
+                    except: continue
 
             # ── Recursion Logic ───────────────────────────────────────────────
             if depth < max_depth and results_at_this_level:
-                # We branch broadly only at the start (depth 1 and 2).
-                # Beyond that, we only follow the single BEST path to reach high depths (11-15).
-                branch_limit = 2
-                
-                if depth <= branch_limit:
-                    # Branch mode: go deeper on all viable paths
-                    for r in results_at_this_level:
+                if is_root:
+                    # Root level: pick top 10 promising paths (highest min_price) to follow deep
+                    top_paths = sorted(results_at_this_level, key=lambda x: x["min_price"], reverse=True)[:10]
+                    for r in top_paths:
                         if r["n_products"] > 0:
                             explore(r["applied"], depth + 1)
                 else:
-                    # Greedy mode: only follow the most promising path (highest min price)
+                    # Deep levels: follow ONLY the single best path horizontally
                     viable = [r for r in results_at_this_level if r["n_products"] > 0]
                     if viable:
                         best = max(viable, key=lambda x: x["min_price"])
                         explore(best["applied"], depth + 1)
+
 
 
         progress_log.append(f"[Cascade] Exploring up to depth {max_depth}...")
