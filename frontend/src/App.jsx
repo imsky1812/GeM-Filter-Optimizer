@@ -708,6 +708,121 @@ export default function App() {
               </div>
             )}
           </div>
+
+          {/* Mandatory Filters Section - MOVED TO STEP 2 */}
+          <div className="mandatory-filters-section" style={{ marginTop: "1.5rem", textAlign: "left", background: "var(--surface2)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--border)" }}>
+            <div style={{ marginBottom: "0.5rem", fontWeight: "bold", fontSize: "0.9rem" }}>
+              Mandatory Spec Requirements (Optional)
+            </div>
+            <div style={{ fontSize: "0.75rem", color: "var(--text3)", marginBottom: "1rem" }}>
+              Select any specific features the buyer absolutely requires. The deep search will start from these filters and find the remaining golden filters needed for L1.
+            </div>
+            
+            {/* Selected Filters Chips */}
+            {mandatoryFilters.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
+                {mandatoryFilters.map((mf, idx) => (
+                  <div key={idx} style={{ 
+                    background: "rgba(156, 39, 176, 0.15)", 
+                    border: "1px solid rgba(156, 39, 176, 0.4)",
+                    padding: "4px 8px", 
+                    borderRadius: "4px",
+                    fontSize: "0.75rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px"
+                  }}>
+                    <span style={{ color: "var(--text2)" }}>{mf.filterName}:</span>
+                    <strong style={{ color: "var(--text1)" }}>{mf.value}</strong>
+                    <button 
+                      onClick={() => setMandatoryFilters(prev => prev.filter((_, i) => i !== idx))}
+                      style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", marginLeft: "4px", padding: 0 }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Dropdown UI */}
+            <div style={{ position: "relative" }}>
+              <button 
+                className="btn" 
+                onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
+                style={{ background: "var(--surface1)", border: "1px solid var(--border)", fontSize: "0.8rem", padding: "6px 12px" }}
+              >
+                + Add Required Spec {isFilterDropdownOpen ? "▲" : "▼"}
+              </button>
+
+              {isFilterDropdownOpen && scrapedData && (
+                <div style={{ 
+                  position: "absolute", top: "100%", left: 0, marginTop: "4px",
+                  background: "var(--surface1)", border: "1px solid var(--border)",
+                  borderRadius: "6px", boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+                  zIndex: 10, width: "300px", maxHeight: "300px", overflowY: "auto"
+                }}>
+                  {scrapedData.filters.filter(f => f.isGolden).map((filter) => {
+                    const isHovered = hoveredFilterKey === filter.filterKey;
+                    return (
+                      <div 
+                        key={filter.filterKey}
+                        onMouseEnter={() => setHoveredFilterKey(filter.filterKey)}
+                        onMouseLeave={() => setHoveredFilterKey(null)}
+                        style={{ 
+                          padding: "8px 12px", borderBottom: "1px solid var(--border)",
+                          background: isHovered ? "var(--surface2)" : "transparent",
+                          cursor: "pointer", position: "relative",
+                          display: "flex", justifyContent: "space-between", alignItems: "center"
+                        }}
+                      >
+                        <span style={{ fontSize: "0.8rem" }}>{filter.filterName}</span>
+                        <span style={{ fontSize: "0.8rem", color: "var(--text3)" }}>▶</span>
+
+                        {/* Sub-menu for values */}
+                        {isHovered && (
+                          <div style={{
+                            position: "absolute", top: 0, left: "100%",
+                            background: "var(--surface1)", border: "1px solid var(--border)",
+                            borderRadius: "6px", boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+                            zIndex: 11, minWidth: "200px", maxHeight: "300px", overflowY: "auto"
+                          }}>
+                            {filter.values.map(val => (
+                              <div 
+                                key={val}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  // Check if already selected
+                                  if (!mandatoryFilters.some(mf => mf.filterKey === filter.filterKey && mf.value === val)) {
+                                    setMandatoryFilters(prev => [...prev, {
+                                      filterKey: filter.filterKey,
+                                      filterName: filter.filterName,
+                                      value: val,
+                                      isGolden: true
+                                    }]);
+                                  }
+                                  setIsFilterDropdownOpen(false);
+                                  setHoveredFilterKey(null);
+                                }}
+                                style={{
+                                  padding: "8px 12px", borderBottom: "1px solid var(--border)",
+                                  fontSize: "0.8rem", cursor: "pointer"
+                                }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = "var(--surface2)"}
+                                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                              >
+                                {val}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
           {priceNum > 0 && priceNum >= maxCatPrice && (
             <div className="warn-box" style={{ marginTop: ".75rem" }}>
               ⚠ Your price ₹{priceNum.toLocaleString()} is above all{" "}
@@ -878,120 +993,7 @@ export default function App() {
                       ⏱ This may take <strong>1–3 minutes</strong> depending on category size.
                     </div>
                     
-                    {/* Mandatory Filters Section */}
-                    <div className="mandatory-filters-section" style={{ marginBottom: "1.5rem", textAlign: "left", background: "var(--surface2)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--border)" }}>
-                      <div style={{ marginBottom: "0.5rem", fontWeight: "bold", fontSize: "0.9rem" }}>
-                        Mandatory Spec Requirements (Optional)
-                      </div>
-                      <div style={{ fontSize: "0.75rem", color: "var(--text3)", marginBottom: "1rem" }}>
-                        Select any specific features the buyer absolutely requires. The deep search will start from these filters and find the remaining golden filters needed for L1.
-                      </div>
-                      
-                      {/* Selected Filters Chips */}
-                      {mandatoryFilters.length > 0 && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
-                          {mandatoryFilters.map((mf, idx) => (
-                            <div key={idx} style={{ 
-                              background: "rgba(156, 39, 176, 0.15)", 
-                              border: "1px solid rgba(156, 39, 176, 0.4)",
-                              padding: "4px 8px", 
-                              borderRadius: "4px",
-                              fontSize: "0.75rem",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "4px"
-                            }}>
-                              <span style={{ color: "var(--text2)" }}>{mf.filterName}:</span>
-                              <strong style={{ color: "var(--text1)" }}>{mf.value}</strong>
-                              <button 
-                                onClick={() => setMandatoryFilters(prev => prev.filter((_, i) => i !== idx))}
-                                style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", marginLeft: "4px", padding: 0 }}
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
 
-                      {/* Dropdown UI */}
-                      <div style={{ position: "relative" }}>
-                        <button 
-                          className="btn" 
-                          onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
-                          style={{ background: "var(--surface1)", border: "1px solid var(--border)", fontSize: "0.8rem", padding: "6px 12px" }}
-                        >
-                          + Add Required Spec {isFilterDropdownOpen ? "▲" : "▼"}
-                        </button>
-
-                        {isFilterDropdownOpen && scrapedData && (
-                          <div style={{ 
-                            position: "absolute", top: "100%", left: 0, marginTop: "4px",
-                            background: "var(--surface1)", border: "1px solid var(--border)",
-                            borderRadius: "6px", boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-                            zIndex: 10, width: "300px", maxHeight: "300px", overflowY: "auto"
-                          }}>
-                            {scrapedData.filters.filter(f => f.isGolden).map((filter) => {
-                              const isHovered = hoveredFilterKey === filter.filterKey;
-                              return (
-                                <div 
-                                  key={filter.filterKey}
-                                  onMouseEnter={() => setHoveredFilterKey(filter.filterKey)}
-                                  onMouseLeave={() => setHoveredFilterKey(null)}
-                                  style={{ 
-                                    padding: "8px 12px", borderBottom: "1px solid var(--border)",
-                                    background: isHovered ? "var(--surface2)" : "transparent",
-                                    cursor: "pointer", position: "relative",
-                                    display: "flex", justifyContent: "space-between", alignItems: "center"
-                                  }}
-                                >
-                                  <span style={{ fontSize: "0.8rem" }}>{filter.filterName}</span>
-                                  <span style={{ fontSize: "0.8rem", color: "var(--text3)" }}>▶</span>
-
-                                  {/* Sub-menu for values */}
-                                  {isHovered && (
-                                    <div style={{
-                                      position: "absolute", top: 0, left: "100%",
-                                      background: "var(--surface1)", border: "1px solid var(--border)",
-                                      borderRadius: "6px", boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-                                      zIndex: 11, minWidth: "200px", maxHeight: "300px", overflowY: "auto"
-                                    }}>
-                                      {filter.values.map(val => (
-                                        <div 
-                                          key={val}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            // Check if already selected
-                                            if (!mandatoryFilters.some(mf => mf.filterKey === filter.filterKey && mf.value === val)) {
-                                              setMandatoryFilters(prev => [...prev, {
-                                                filterKey: filter.filterKey,
-                                                filterName: filter.filterName,
-                                                value: val,
-                                                isGolden: true
-                                              }]);
-                                            }
-                                            setIsFilterDropdownOpen(false);
-                                            setHoveredFilterKey(null);
-                                          }}
-                                          style={{
-                                            padding: "8px 12px", borderBottom: "1px solid var(--border)",
-                                            fontSize: "0.8rem", cursor: "pointer"
-                                          }}
-                                          onMouseEnter={(e) => e.currentTarget.style.background = "var(--surface2)"}
-                                          onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
-                                        >
-                                          {val}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
 
                     <div style={{ display: "flex", gap: "1rem", justifyContent: "center", flexWrap: "wrap" }}>
                       <button
