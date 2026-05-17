@@ -10,13 +10,13 @@ sys.path.insert(0, "backend")
 from scraper import GeMScraper
 
 scraper = GeMScraper()
-url = "https://mkp.gem.gov.in/computer-displays-interactive-panels-with-cpu/search#/?q=interactive%20panel"
-target = 450000
+url = "https://mkp.gem.gov.in/furniture-and-furnishings-accommodation-furniture-furniture-revolving-chair-v5-/search"
+target = 12000
 
 # Quick scrape for golden filters
 data = scraper.scrape(url)
-golden = [f for f in data["filters"] if f.get("isGolden")]
-print(f"Products: {data['productCount']}, Golden Filters: {len(golden)}")
+golden = [f for f in data["filters"] if f.get("isGolden") and f.get("filterKey") != "mse_applicable"]
+print(f"Products: {data['productCount']}, Golden Filters: {len(golden)} (MSE excluded)")
 
 # Run the chain hunt
 print("\n" + "=" * 70)
@@ -25,7 +25,8 @@ result = scraper.smart_l1_discovery(
     category_url=url,
     target_price=target,
     golden_filters=golden,
-    location=""
+    location="",
+    excluded_filter_keys=["mse_applicable"],
 )
 elapsed = time.time() - t0
 

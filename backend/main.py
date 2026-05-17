@@ -71,6 +71,8 @@ class ChainHuntRequest(BaseModel):
     target_price: int
     golden_filters: list
     location: Optional[str] = ""
+    mandatory_filters: Optional[list] = []
+    excluded_filter_keys: Optional[list] = []
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -197,11 +199,14 @@ def find_l1(req: FindL1Request):
     # If frontend passed golden_filters from initial scrape, use them directly.
     # Otherwise fall back to doing a fresh scrape inside find_l1_combinations.
     golden_filters = req.golden_filters or []
+    # Always exclude MSE — only manufacturers can use it, not resellers
+    golden_filters = [f for f in golden_filters if f.get("filterKey") != "mse_applicable"]
     if not golden_filters:
         # No filters passed — do a quick scrape to get them
         try:
             scraped = GeMScraper().scrape(url, location=req.location or "")
-            golden_filters = [f for f in scraped.get("filters", []) if f.get("isGolden")]
+            golden_filters = [f for f in scraped.get("filters", [])
+                            if f.get("isGolden") and f.get("filterKey") != "mse_applicable"]
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to fetch golden filters: {e}")
 
@@ -393,11 +398,16 @@ def chain_hunt(req: ChainHuntRequest):
 
     try:
         scraper = GeMScraper()
+        # Always exclude MSE — only manufacturers can use it, not resellers
+        excluded = set(req.excluded_filter_keys or [])
+        excluded.add("mse_applicable")
         result = scraper.smart_l1_discovery(
             category_url=req.category_url,
             target_price=req.target_price,
             golden_filters=golden,
-            location=req.location or ""
+            location=req.location or "",
+            excluded_filter_keys=list(excluded),
+            mandatory_filters=req.mandatory_filters or [],
         )
         return result
     except Exception as e:

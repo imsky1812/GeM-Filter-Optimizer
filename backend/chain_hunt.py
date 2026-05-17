@@ -149,13 +149,19 @@ def _get_facet_values_for_key(self, facets: dict, filter_key: str, filter_name: 
 # ── Main Algorithm: Sequential L1 Chain Hunt ─────────────────────────────────
 
 def smart_l1_discovery(self, category_url: str, target_price: int,
-                       golden_filters: list, location: str = "") -> dict:
+                       golden_filters: list, location: str = "",
+                       excluded_filter_keys: list = None,
+                       mandatory_filters: list = None) -> dict:
     """
     Sequential chain elimination algorithm.
 
     Strategy: GREEDY-BEST — at each depth, try ALL unused filter values,
     pick the one that raises the minimum price THE MOST, commit to it,
     and continue until we are L1 or run out of filters.
+
+    excluded_filter_keys: list of filterKey codes to skip (e.g. MSE).
+    mandatory_filters: list of {filterKey, filterName, value} dicts to
+                       pre-apply before the chain begins.
     """
     MAX_API_CALLS = 500
     MAX_TIME = 180  # seconds
@@ -164,10 +170,12 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     t_start = time.time()
     category_url, base_extra = self._normalize_url(category_url)
 
-    # Build golden filter lookup
+    excluded = set(excluded_filter_keys or [])
+
+    # Build golden filter lookup, excluding banned keys
     golden_list = []
     for f in golden_filters:
-        if f.get("isGolden"):
+        if f.get("isGolden") and f["filterKey"] not in excluded:
             golden_list.append({
                 "filterKey": f["filterKey"],
                 "filterName": f["filterName"],
@@ -191,11 +199,23 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     # At each depth: test all unused filter values, pick the one that
     # raises min_price the most, commit, repeat.
 
+    # Build mandatory starting filters
+    mandatory_active = {}
+    if mandatory_filters:
+        for mf in mandatory_filters:
+            key = mf.get("filterKey")
+            val = mf.get("value")
+            if key and val:
+                mandatory_active[key] = val
+        logger.info(f"[ChainHunt] Mandatory pre-applied: {mandatory_active}")
+
     def _run_chain(initial_active=None, label="primary"):
-        active = dict(initial_active or {})
+        active = dict(mandatory_active)  # always start from mandatory
+        active.update(initial_active or {})
         used_keys = set(active.keys())
         steps = []
         untapped_fallback = None  # saved in case we can't find a proper L1 path
+        lateral_moves_left = 3    # max consecutive lateral moves before giving up
 
         for depth in range(15):
             if not _budget_ok():
@@ -245,6 +265,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             )
 
             best_candidate = None  # {key, name, value, new_min, total, sellers}
+            lateral_best = None    # best lateral move (narrows pool, no price gain)
 
             for gf in golden_list:
                 if not _budget_ok():
@@ -322,6 +343,18 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
 
                     # STRICT PROGRESS: new min must be HIGHER than current min
                     if new_min <= current_min:
+                        # No price progress, but track as a LATERAL candidate
+                        # (narrows the pool, which may enable price progress later)
+                        if new_total < current_total and new_total >= 1:
+                            if lateral_best is None or new_total < lateral_best["total"]:
+                                lateral_best = {
+                                    "key": gf_key,
+                                    "name": gf["filterName"],
+                                    "value": val,
+                                    "new_min": new_min,
+                                    "total": new_total,
+                                    "sellers": new_sellers,
+                                }
                         continue
 
                     # Check if this is BETTER than our current best candidate
@@ -345,13 +378,25 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
 
             # 4. Apply the best candidate
             if best_candidate is None:
-                # No filter can raise the min price — stuck
-                logger.info(
-                    f"[ChainHunt] [{label}] STUCK at min=Rs {current_min} "
-                    f"after {len(used_keys)} filters"
-                )
-                break
+                # No filter raises price — try a LATERAL MOVE to narrow the pool
+                if lateral_best and lateral_moves_left > 0:
+                    lateral_moves_left -= 1
+                    best_candidate = lateral_best
+                    logger.info(
+                        f"[ChainHunt] [{label}] LATERAL MOVE: {lateral_best['name']}"
+                        f"={lateral_best['value']} (total {current_total}->"
+                        f"{lateral_best['total']}, price stays Rs {current_min},"
+                        f" {lateral_moves_left} laterals left)"
+                    )
+                else:
+                    # Truly stuck — no price progress AND no useful lateral moves
+                    logger.info(
+                        f"[ChainHunt] [{label}] STUCK at min=Rs {current_min} "
+                        f"after {len(used_keys)} filters"
+                    )
+                    break
 
+            is_lateral = (best_candidate["new_min"] <= current_min)
             step = {
                 "iteration": depth + 1,
                 "prevMinPrice": current_min,
@@ -360,18 +405,29 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                     "filterName": best_candidate["name"],
                     "value": best_candidate["value"],
                 },
-                "result": "ELIMINATED" if best_candidate["new_min"] <= target_price else "L1_WIN",
+                "result": "LATERAL" if is_lateral else (
+                    "ELIMINATED" if best_candidate["new_min"] <= target_price else "L1_WIN"
+                ),
                 "newMinPrice": best_candidate["new_min"],
                 "newTotal": best_candidate["total"],
                 "sellerCount": best_candidate["sellers"],
             }
             steps.append(step)
 
-            logger.info(
-                f"[ChainHunt] [{label}] PROGRESS: Rs {current_min} -> "
-                f"Rs {best_candidate['new_min']} via "
-                f"{best_candidate['name']}={best_candidate['value']}"
-            )
+            if is_lateral:
+                logger.info(
+                    f"[ChainHunt] [{label}] LATERAL: total {current_total}->"
+                    f"{best_candidate['total']} via "
+                    f"{best_candidate['name']}={best_candidate['value']}"
+                )
+            else:
+                # Real progress — reset lateral counter
+                lateral_moves_left = 3
+                logger.info(
+                    f"[ChainHunt] [{label}] PROGRESS: Rs {current_min} -> "
+                    f"Rs {best_candidate['new_min']} via "
+                    f"{best_candidate['name']}={best_candidate['value']}"
+                )
 
             active[best_candidate["key"]] = best_candidate["value"]
             used_keys.add(best_candidate["key"])
@@ -455,6 +511,21 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         else:
             status = "PARTIAL"
 
+    # Calculate best achievable price across all paths (for STUCK/PARTIAL messaging)
+    best_achievable = 0
+    for p in winning_paths:
+        mp = p.get("nicheMinPrice") or 0
+        if mp > best_achievable:
+            best_achievable = mp
+
+    # Get initial market min price (from the first path's first step or the initial scrape)
+    market_min = None
+    for p in winning_paths:
+        iters = p.get("iterations", [])
+        if iters and iters[0].get("prevMinPrice"):
+            market_min = iters[0]["prevMinPrice"]
+            break
+
     logger.info(f"[ChainHunt] Done in {elapsed:.1f}s: {len(winning_paths)} winning paths, "
                 f"{api_calls[0]} API calls")
 
@@ -465,4 +536,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         "status": status,
         "goldenFilterCount": len(golden_list),
         "elapsed": round(elapsed, 1),
+        "bestAchievablePrice": best_achievable if best_achievable > 0 else None,
+        "marketMinPrice": market_min,
+        "targetPrice": target_price,
     }

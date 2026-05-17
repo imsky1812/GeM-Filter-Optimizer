@@ -338,7 +338,7 @@ export default function App() {
           min_depth: minD,
           max_depth: maxD,
           golden_filters: scrapedData
-            ? scrapedData.filters.filter((f) => f.isGolden)
+            ? scrapedData.filters.filter((f) => f.isGolden && f.filterKey !== "mse_applicable")
             : [],
           mandatory_filters: mandatoryFilters,
         }),
@@ -380,9 +380,11 @@ export default function App() {
           category_url: normalizedUrl,
           target_price: priceNum,
           golden_filters: scrapedData
-            ? scrapedData.filters.filter((f) => f.isGolden)
+            ? scrapedData.filters.filter((f) => f.isGolden && f.filterKey !== "mse_applicable")
             : [],
           location: selectedLocation,
+          mandatory_filters: mandatoryFilters,
+          excluded_filter_keys: ["mse_applicable"],
         }),
       });
       if (!res.ok) {
@@ -665,7 +667,7 @@ export default function App() {
                   borderRadius: "8px", boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
                   zIndex: 999, width: "320px", maxHeight: "360px", overflowY: "auto", overflowX: "hidden"
                 }}>
-                  {scrapedData.filters.filter(f => f.isGolden).map((filter) => {
+                  {scrapedData.filters.filter(f => f.isGolden && f.filterKey !== "mse_applicable").map((filter) => {
                     const isHovered = hoveredFilterKey === filter.filterKey;
                     return (
                       <div key={filter.filterKey} style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
@@ -1030,27 +1032,106 @@ export default function App() {
                 <div className="chain-summary">
                   <div className="chain-stat chain-stat-win">
                     <div className="chain-stat-val">{chainResults.winningPaths?.length ?? 0}</div>
-                    <div className="chain-stat-lbl">Winning Paths</div>
+                    <div className="chain-stat-lbl">Paths Found</div>
                   </div>
                   <div className="chain-stat chain-stat-api">
                     <div className="chain-stat-val">{chainResults.totalApiCalls ?? 0}</div>
-                    <div className="chain-stat-lbl">API Calls Used</div>
+                    <div className="chain-stat-lbl">API Calls</div>
                   </div>
                   <div className="chain-stat">
                     <div className="chain-stat-val">{chainResults.goldenFilterCount ?? 0}</div>
                     <div className="chain-stat-lbl">Golden Filters</div>
                   </div>
                   <div className="chain-stat">
-                    <div className="chain-stat-val">{chainResults.status === "WIN" ? "✓" : chainResults.status === "PARTIAL" ? "⚠" : "✗"}</div>
+                    <div className="chain-stat-val" style={{
+                      color: chainResults.status === "WIN" ? "var(--green)" : chainResults.status === "PARTIAL" ? "var(--amber)" : "var(--red)"
+                    }}>
+                      {chainResults.status === "WIN" ? "✓ WIN" : chainResults.status === "PARTIAL" ? "⚠ STUCK" : "✗ FAIL"}
+                    </div>
                     <div className="chain-stat-lbl">Status</div>
                   </div>
                 </div>
+
+                {/* ── STUCK / NO L1 PATH BANNER ── */}
+                {chainResults.status !== "WIN" && (
+                  <div style={{
+                    background: "linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(251, 191, 36, 0.06) 100%)",
+                    border: "1px solid rgba(239, 68, 68, 0.25)",
+                    borderRadius: "12px",
+                    padding: "1.25rem 1.5rem",
+                    marginBottom: "1.25rem",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "1rem" }}>
+                      <div style={{
+                        width: "40px", height: "40px", borderRadius: "50%",
+                        background: "rgba(239, 68, 68, 0.15)", display: "flex",
+                        alignItems: "center", justifyContent: "center", fontSize: "1.3rem", flexShrink: 0
+                      }}>🚫</div>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: "1rem", color: "#ef4444" }}>
+                          No Path to L1 at ₹{priceNum.toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: "0.78rem", color: "var(--text3)", marginTop: "2px" }}>
+                          All golden filters exhausted — no combination can make your product the cheapest.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem",
+                      background: "rgba(0,0,0,0.15)", borderRadius: "8px", padding: "0.75rem",
+                    }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: "0.65rem", color: "var(--text4)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px" }}>
+                          Your Price
+                        </div>
+                        <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text1)" }}>
+                          ₹{priceNum.toLocaleString()}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: "0.65rem", color: "var(--text4)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px" }}>
+                          Best Achievable Floor
+                        </div>
+                        <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--amber)" }}>
+                          ₹{(chainResults.bestAchievablePrice ?? 0).toLocaleString()}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: "0.65rem", color: "var(--text4)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px" }}>
+                          Gap (Unreachable)
+                        </div>
+                        <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "#ef4444" }}>
+                          ₹{(priceNum - (chainResults.bestAchievablePrice ?? 0)).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    {chainResults.bestAchievablePrice && (
+                      <div style={{
+                        marginTop: "0.75rem", padding: "0.6rem 0.75rem",
+                        background: "rgba(251, 191, 36, 0.08)", borderRadius: "6px",
+                        border: "1px solid rgba(251, 191, 36, 0.15)",
+                        fontSize: "0.78rem", color: "var(--text2)",
+                        display: "flex", alignItems: "center", gap: "8px",
+                      }}>
+                        <span style={{ fontSize: "1rem" }}>💡</span>
+                        <span>
+                          To become L1 in this category, you would need to list your product
+                          below <strong style={{ color: "var(--amber)" }}>
+                            ₹{chainResults.bestAchievablePrice.toLocaleString()}
+                          </strong> (the highest price floor achievable through spec filters).
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {(!chainResults.winningPaths || chainResults.winningPaths.length === 0) ? (
                   <div className="empty" style={{ marginTop: "1rem" }}>
                     <div className="empty-icon">🔍</div>
                     <div className="empty-text">
-                      No winning path found to make your product L1.<br />
+                      No filter combinations found.<br />
                       <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
                         The current L1 products cannot be bypassed with available golden filters.
                         Try lowering your price or check if additional filter options exist.
@@ -1061,7 +1142,7 @@ export default function App() {
                   <>
                     {/* Path selector tabs */}
                     <div style={{ fontSize: ".72rem", color: "var(--text3)", marginBottom: ".75rem" }}>
-                      Found <strong>{chainResults.winningPaths.length}</strong> winning path{chainResults.winningPaths.length !== 1 ? "s" : ""} to L1 — select one to view the elimination chain:
+                      Found <strong>{chainResults.winningPaths.length}</strong> {chainResults.status === "WIN" ? "winning" : ""} path{chainResults.winningPaths.length !== 1 ? "s" : ""}{chainResults.status === "WIN" ? " to L1" : ""} — select one to view the elimination chain:
                     </div>
                     <div className="chain-path-tabs">
                       {chainResults.winningPaths.map((path, idx) => (
@@ -1110,7 +1191,14 @@ export default function App() {
                                 </div>
 
                                 {/* New L1 preview */}
-                                {step.newMinPrice !== null && step.newMinPrice !== undefined && (
+                                {step.result === "LATERAL" ? (
+                                  <div className="chain-new-l1" style={{ color: "var(--text3)", opacity: 0.8 }}>
+                                    → Pool narrowed to <strong>{step.newTotal}</strong> products
+                                    <span style={{ marginLeft: "auto", fontSize: ".6rem", background: "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "4px" }}>
+                                      LATERAL
+                                    </span>
+                                  </div>
+                                ) : step.newMinPrice !== null && step.newMinPrice !== undefined && (
                                   <div className="chain-new-l1">
                                     → Price floor raised to: <strong>₹{step.newMinPrice?.toLocaleString()}</strong>
                                     <span style={{ marginLeft: "auto", fontSize: ".65rem" }}>
