@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs, urlencode, urldefrag
 
+logger = logging.getLogger("gem-optimizer")
 
 class GeMScraper:
     # Global class-level semaphore ensures no more than 8 concurrent HTTP requests 
@@ -850,6 +851,152 @@ class GeMScraper:
                         specs[name] = value
 
         return specs
+
+    # ── Surgical Strike: Target a specific competitor ─────────────────────────
+
+    def surgical_strike(self, product_url: str, category_url: str,
+                        target_price: int, golden_filters: list,
+                        location: str = "") -> dict:
+        """
+        Analyze a specific competitor product and find golden filters
+        to exclude it from the niche.
+
+        1. Scrape the competitor's product detail page for specs
+        2. Match specs against golden filter names
+        3. For each golden filter, identify which value the competitor has
+        4. Suggest applying a DIFFERENT value to exclude them
+        5. Verify each suggestion by scraping the category with that filter
+        """
+        import time as _time
+        t_start = _time.time()
+
+        # Step 1: Fetch competitor product page and extract specs
+        logger.info(f"[SurgicalStrike] Fetching competitor: {product_url}")
+        try:
+            html = self._fetch(product_url)
+            soup = BeautifulSoup(html, "html.parser")
+        except Exception as e:
+            return {"error": f"Failed to fetch product page: {e}"}
+
+        raw_specs = self._extract_specs_from_page(soup)
+        if not raw_specs:
+            return {"error": "Could not extract specs from the product page. Make sure it's a valid GeM product detail URL."}
+
+        # Extract product name and price from the page
+        product_name = ""
+        product_price = None
+        name_el = soup.select_one("h1, .product-name, .product-title, [class*='product'] h2")
+        if name_el:
+            product_name = name_el.get_text(strip=True)[:120]
+
+        price_el = soup.select_one(".price, [class*='price'], .final-price")
+        if price_el:
+            import re
+            price_text = price_el.get_text(strip=True)
+            price_match = re.search(r'[\d,]+(?:\.\d+)?', price_text.replace(',', ''))
+            if price_match:
+                try:
+                    product_price = int(float(price_match.group()))
+                except:
+                    pass
+
+        logger.info(f"[SurgicalStrike] Extracted {len(raw_specs)} specs from product")
+
+        # Step 2: Build golden filter lookup (exclude MSE)
+        golden_map = {}
+        for gf in golden_filters:
+            if gf.get("isGolden") and gf.get("filterKey") != "mse_applicable":
+                golden_map[gf["filterKey"]] = {
+                    "filterName": gf["filterName"],
+                    "filterKey": gf["filterKey"],
+                    "values": gf.get("values", []) or gf.get("facetValues", []),
+                }
+
+        # Step 3: Match competitor specs to golden filters
+        matches = []
+        for spec_name, spec_value in raw_specs.items():
+            for gf_key, gf_info in golden_map.items():
+                # Match by name (fuzzy)
+                if self._names_match(spec_name, gf_info["filterName"]):
+                    matches.append({
+                        "filterKey": gf_key,
+                        "filterName": gf_info["filterName"],
+                        "competitorValue": spec_value,
+                        "availableValues": gf_info["values"],
+                        "specName": spec_name,
+                    })
+                    break
+
+        logger.info(f"[SurgicalStrike] Matched {len(matches)} golden filters")
+
+        # Step 4: For each matched filter, find counter-values that exclude competitor
+        category_url_clean, base_extra = self._normalize_url(category_url)
+        counter_filters = []
+        api_calls = 0
+
+        for match in matches:
+            competitor_val = match["competitorValue"].strip()
+            available = match["availableValues"]
+
+            for alt_val in available:
+                alt_val_clean = str(alt_val).strip()
+                # Skip if same as competitor's value
+                if alt_val_clean.lower() == competitor_val.lower():
+                    continue
+
+                # Verify: scrape with this filter value to check if competitor is excluded
+                params = {match["filterKey"]: alt_val_clean}
+                if base_extra:
+                    params.update(base_extra)
+                if location and location != "All India":
+                    params["sellers_si"] = location
+
+                try:
+                    data = self._fetch_json_page(category_url_clean, page=1, extra_params=params)
+                    api_calls += 1
+                except:
+                    continue
+
+                total = data.get("total", 0)
+                min_price = None
+                products = data.get("data", [])
+                if products:
+                    prices = [p.get("totalPriceWithoutConvenience") or p.get("price") or 0
+                              for p in products if (p.get("totalPriceWithoutConvenience") or p.get("price") or 0) > 0]
+                    min_price = min(prices) if prices else None
+
+                counter_filters.append({
+                    "filterKey": match["filterKey"],
+                    "filterName": match["filterName"],
+                    "competitorValue": competitor_val,
+                    "counterValue": alt_val_clean,
+                    "resultTotal": total,
+                    "resultMinPrice": min_price,
+                    "wouldWin": min_price is not None and min_price > target_price,
+                    "isUntapped": total == 0,
+                })
+
+        # Sort: wins first, then by highest min price
+        counter_filters.sort(key=lambda x: (
+            0 if x["wouldWin"] else (1 if x["isUntapped"] else 2),
+            -(x["resultMinPrice"] or 0),
+        ))
+
+        elapsed = _time.time() - t_start
+
+        return {
+            "competitorName": product_name,
+            "competitorPrice": product_price,
+            "competitorUrl": product_url,
+            "rawSpecs": raw_specs,
+            "goldenMatches": matches,
+            "counterFilters": counter_filters,
+            "totalApiCalls": api_calls,
+            "elapsed": round(elapsed, 1),
+            "wins": sum(1 for cf in counter_filters if cf["wouldWin"]),
+            "untapped": sum(1 for cf in counter_filters if cf["isUntapped"]),
+        }
+
 
     def _enrich_single_product(self, product: dict, name_to_code: dict) -> dict:
         """Fetch specs for a single product (used by thread pool)."""

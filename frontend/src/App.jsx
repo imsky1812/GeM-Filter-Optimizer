@@ -1,233 +1,7 @@
-import { useState, useEffect, useRef } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import { useState, useEffect } from "react";
 import "./index.css";
 
 const BACKEND_URL = "/api";
-
-// ─── ANALYSIS ENGINE ──────────────────────────────────────────────────────────
-
-
-// ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
-const ChartTip = ({ active, payload }) => {
-  if (!active || !payload?.length) return null;
-  const d = payload[0].payload;
-  return (
-    <div
-      style={{
-        background: "var(--surface2)",
-        border: "1px solid var(--border)",
-        borderRadius: 10,
-        padding: "10px 14px",
-        fontSize: 12,
-        color: "var(--text)",
-        boxShadow: "var(--shadow-lg)",
-      }}
-    >
-      <div
-        style={{
-          fontWeight: 600,
-          marginBottom: 4,
-          maxWidth: 220,
-          lineHeight: 1.3,
-        }}
-      >
-        {d.label}
-      </div>
-      <div>
-        Score: <strong>{d.score}</strong>
-      </div>
-      <div>
-        Gap:{" "}
-        <strong style={{ color: "var(--green)" }}>
-          ₹{d.priceGap.toLocaleString()}
-        </strong>
-      </div>
-      <div>
-        Competitors: <strong>{d.competitorCount}</strong>
-      </div>
-    </div>
-  );
-};
-
-function OpportunityCard({ r, rank }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="win-card">
-      <div className="win-card-top" onClick={() => setOpen((o) => !o)}>
-        <span className="win-rank win-rank-ready">L1</span>
-        <div className="win-card-body">
-          <div className="win-filters">
-            {r.combo.map((c, i) => {
-              const filterName = c.name || c.filterName || c.filterKey || "Filter";
-              return (
-                <span key={i} className={`filter-chip ${c.isGolden ? 'filter-chip-golden' : ''}`}>
-                  {c.isGolden && <span className="golden-dot">★</span>}
-                  <span className="filter-chip-name">{filterName}</span>: <strong>{c.value}</strong>
-                </span>
-              );
-            })}
-          </div>
-          <div className="win-meta">
-            <span>
-              Next cheapest:{" "}
-              <strong>{r.isUntapped ? "None (Untapped)" : `₹${r.minCompetitorPrice.toLocaleString()}`}</strong>
-            </span>
-            <span>
-              Your price:{" "}
-              <strong>₹{r.sellerPrice.toLocaleString()}</strong>
-            </span>
-            <span>
-              Gap:{" "}
-              <strong className="gap-val">
-                {r.isUntapped ? "∞" : `₹${r.priceGap.toLocaleString()}`}
-              </strong>
-            </span>
-            <span>
-              Competitors: <strong>{r.competitorCount}</strong>
-            </span>
-          </div>
-        </div>
-        <div className="win-score">
-          <div className="win-score-num">{r.score}</div>
-          <div className="win-score-label">score</div>
-        </div>
-        <span className="expand-arrow">{open ? "▲" : "▼"}</span>
-      </div>
-      {open && (
-        <div className="win-detail">
-          {!r.hasGolden && (
-            <div className="warn-box" style={{ marginBottom: "1rem" }}>
-              <span style={{ fontSize: "1rem", marginRight: "6px" }}>⚠</span>
-              <span>
-                <strong>Warning:</strong> This combination uses only normal filters.
-                On GeM, changing normal filters <strong>does NOT</strong> change who gets the L1 position.
-                L1 is determined strictly by Golden Parameters and Make in India/MSE status.
-                Use combinations with Golden Filters to guarantee L1.
-              </span>
-            </div>
-          )}
-          <div className="detail-cols">
-            <div>
-              <div className="detail-section-title">Price Ranking</div>
-              <table className="comp-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Product</th>
-                    <th>Price</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="yours-row">
-                    <td>
-                      <span
-                        style={{
-                          fontFamily: "var(--mono)",
-                          fontSize: 11,
-                          fontWeight: 700,
-                          background: "var(--green)",
-                          color: "#000",
-                          padding: "2px 5px",
-                          borderRadius: 3,
-                        }}
-                      >
-                        1
-                      </span>
-                    </td>
-                    <td>
-                      Your Product{" "}
-                      <span className="rank1-badge">YOU</span>
-                    </td>
-                    <td
-                      className="price-mono"
-                      style={{ color: "var(--green)" }}
-                    >
-                      ₹{r.sellerPrice.toLocaleString()}
-                    </td>
-                  </tr>
-                  {r.competitors.map((c, i) => (
-                    <tr key={i}>
-                      <td
-                        style={{
-                          fontFamily: "var(--mono)",
-                          fontSize: 11,
-                          color: "var(--text4)",
-                        }}
-                      >
-                        {i + 2}
-                      </td>
-                      <td
-                        style={{
-                          maxWidth: 160,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {c.name || c.id}
-                      </td>
-                      <td className="price-mono">
-                        ₹{c.price.toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div>
-              <div className="detail-section-title">
-                How to Apply on GeM
-              </div>
-              <div className="steps-list">
-                <div className="step-item">
-                  <span className="step-icon si-info">1</span>
-                  <span className="step-text">
-                    Go to <strong>GeM Seller Dashboard → My Products</strong>
-                  </span>
-                </div>
-                <div className="step-item">
-                  <span className="step-icon si-info">2</span>
-                  <span className="step-text">
-                    Click <strong>Edit Listing</strong> on your product
-                  </span>
-                </div>
-                {r.combo.map((c, i) => {
-                  const filterName = c.name || c.filterName || c.filterKey || "Filter";
-                  return (
-                    <div className="step-item" key={i}>
-                      <span className="step-icon si-set">✓</span>
-                      <span className="step-text">
-                        Set <strong>"{filterName}"</strong> to{" "}
-                        <strong>"{c.value}"</strong>
-                      </span>
-                    </div>
-                  );
-                })}
-                <div className="step-item">
-                  <span className="step-icon si-info">→</span>
-                  <span className="step-text">
-                    Save &amp; submit listing for review
-                  </span>
-                </div>
-                <div className="step-item">
-                  <span className="step-icon si-result">★</span>
-                  <span className="step-text">
-                    <strong>
-                      You rank L1 — cheapest by ₹
-                      {r.priceGap.toLocaleString()}
-                    </strong>
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -240,20 +14,18 @@ export default function App() {
   const [selectedLocation, setSelectedLocation] = useState("All India");
   const handlePrintReport = () => window.print();
 
-  // Deep Search state
-  const [deepStatus, setDeepStatus] = useState("idle"); // idle | loading | done | error
-  const [deepResults, setDeepResults] = useState(null);
-  const [deepError, setDeepError] = useState("");
-  const [deepDepthTab, setDeepDepthTab] = useState(null); // selected depth tab
-
-
   // Chain Hunt state
-  const [chainStatus, setChainStatus] = useState("idle"); // idle | loading | done | error
+  const [chainStatus, setChainStatus] = useState("idle");
   const [chainResults, setChainResults] = useState(null);
   const [chainError, setChainError] = useState("");
   const [chainPathIdx, setChainPathIdx] = useState(0);
 
-  const [deepRange, setDeepRange] = useState({ min: 3, max: 10 });
+  // Surgical Strike state
+  const [strikeUrl, setStrikeUrl] = useState("");
+  const [strikeStatus, setStrikeStatus] = useState("idle"); // idle | loading | done | error
+  const [strikeResults, setStrikeResults] = useState(null);
+  const [strikeError, setStrikeError] = useState("");
+
   const [mandatoryFilters, setMandatoryFilters] = useState([]);
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [hoveredFilterKey, setHoveredFilterKey] = useState(null);
@@ -278,11 +50,11 @@ export default function App() {
     setScrapeStatus("loading");
     setScrapeError("");
     setScrapedData(null);
-    // Reset deep search when re-scraping
-    setDeepStatus("idle");
-    setDeepResults(null);
-    setDeepError("");
-
+    // Reset all modes when re-scraping
+    setChainStatus("idle");
+    setChainResults(null);
+    setStrikeStatus("idle");
+    setStrikeResults(null);
 
     // Auto-prepend https:// if user didn't include a protocol
     let normalizedUrl = gemUrl.trim();
@@ -314,13 +86,11 @@ export default function App() {
     }
   };
 
-  const handleDeepSearch = async (minD = 3, maxD = 10) => {
-    if (!gemUrl.trim() || !priceNum) return;
-    setDeepRange({ min: minD, max: maxD });
-    setDeepStatus("loading");
-    setDeepResults(null);
-    setDeepError("");
-    setDeepDepthTab(null);
+  const handleSurgicalStrike = async () => {
+    if (!strikeUrl.trim() || !gemUrl.trim() || !priceNum) return;
+    setStrikeStatus("loading");
+    setStrikeResults(null);
+    setStrikeError("");
 
     let normalizedUrl = gemUrl.trim();
     if (!normalizedUrl.startsWith("http://") && !normalizedUrl.startsWith("https://")) {
@@ -328,19 +98,17 @@ export default function App() {
     }
 
     try {
-      const res = await fetch(`${BACKEND_URL}/find-l1`, {
+      const res = await fetch(`${BACKEND_URL}/surgical-strike`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          url: normalizedUrl,
-          seller_price: priceNum,
-          location: selectedLocation,
-          min_depth: minD,
-          max_depth: maxD,
+          product_url: strikeUrl.trim(),
+          category_url: normalizedUrl,
+          target_price: priceNum,
           golden_filters: scrapedData
             ? scrapedData.filters.filter((f) => f.isGolden && f.filterKey !== "mse_applicable")
             : [],
-          mandatory_filters: mandatoryFilters,
+          location: selectedLocation,
         }),
       });
       if (!res.ok) {
@@ -348,15 +116,16 @@ export default function App() {
         throw new Error(
           typeof err.detail === "object"
             ? err.detail.message
-            : err.detail || "Deep search failed"
+            : err.detail || "Surgical strike failed"
         );
       }
       const data = await res.json();
-      setDeepResults(data);
-      setDeepStatus("done");
+      if (data.error) throw new Error(data.error);
+      setStrikeResults(data);
+      setStrikeStatus("done");
     } catch (e) {
-      setDeepError(e.message || "Deep search failed");
-      setDeepStatus("error");
+      setStrikeError(e.message || "Surgical strike failed");
+      setStrikeStatus("error");
     }
   };
 
@@ -404,55 +173,8 @@ export default function App() {
     }
   };
 
-  const exportToPDF = () => {
-    if (!deepResults || !deepResults.combinations) return;
 
-    const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.width;
 
-    doc.setFontSize(16);
-    doc.setTextColor(20, 20, 30);
-    doc.text("GeM L1 Filter Combinations", 14, 20);
-
-    doc.setFontSize(10);
-    doc.setTextColor(100, 100, 100);
-    const splitUrl = doc.splitTextToSize(`Category URL: ${gemUrl}`, pageWidth - 28);
-    doc.text(splitUrl, 14, 28);
-
-    doc.text(`Target Price: Rs ${priceNum.toLocaleString()}`, 14, 38 + (splitUrl.length - 1) * 4);
-
-    let currentY = 46 + (splitUrl.length - 1) * 4;
-
-    deepResults.combinations.forEach((comboData, idx) => {
-      doc.setFontSize(12);
-      doc.setTextColor(0, 0, 0);
-      const title = `Option ${idx + 1} (Score: ${comboData.score} | Competitors: ${comboData.competitorCount})`;
-      doc.text(title, 14, currentY);
-
-      const tableData = comboData.combo.map(c => [
-        c.name || c.filterName || c.filterKey || "Filter",
-        c.value
-      ]);
-
-      autoTable(doc, {
-        startY: currentY + 4,
-        head: [['Filter Name', 'Required Value']],
-        body: tableData,
-        theme: 'grid',
-        headStyles: { fillColor: [108, 92, 231] },
-        margin: { left: 14, right: 14 },
-      });
-
-      currentY = doc.lastAutoTable.finalY + 12;
-
-      if (currentY > doc.internal.pageSize.height - 20) {
-        doc.addPage();
-        currentY = 20;
-      }
-    });
-
-    doc.save("GeM_L1_Filters.pdf");
-  };
 
   // Price range info for the category
   const minCatPrice = scrapedData
@@ -560,7 +282,7 @@ export default function App() {
             <div>
               <div className="card-title">Your Product Price</div>
               <div className="card-desc">
-                Enter your selling price and launch Deep Search for guaranteed L1 ranking paths
+                Enter your selling price and launch Smart L1 Hunt to find golden filter paths
               </div>
             </div>
           </div>
@@ -587,20 +309,6 @@ export default function App() {
                   ) : (
                     "⚡ Smart L1 Hunt"
                   )}
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => handleDeepSearch(3, 10)}
-                  disabled={scrapeStatus !== "done"}
-                >
-                  Deep Search (3-10)
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => handleDeepSearch(11, 15)}
-                  disabled={scrapeStatus !== "done"}
-                >
-                  Ultra Deep (11-15)
                 </button>
               </div>
             )}
@@ -750,238 +458,205 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* DEEP SEARCH ACTIVE VIEW */}
-      {deepStatus !== "idle" && (
+      {/* ── SURGICAL STRIKE SECTION ── */}
+      {scrapedData && priceNum > 0 && (
         <div className="card fade-in fade-in-d2">
-          <div className="deep-search-panel">
-            {deepStatus === "loading" && (
-              <div className="deep-loading">
-                <span className="spin spin-amber" />
-                <div className="deep-loading-title">Deep Search Running...</div>
-                <div className="deep-loading-sub">
-                  Re-scraping GeM with cascading golden filters.
-                  This may take 1–3 minutes.
-                </div>
-                <div className="deep-progress-bar">
-                  <div className="deep-progress-fill" />
-                </div>
-                <div style={{ fontSize: ".68rem", color: "var(--text4)", marginTop: ".5rem" }}>
-                  Exploring depths {deepRange.min} to {deepRange.max} golden filter combinations...
-                </div>
+          <div className="card-hdr">
+            <div className="step-num" style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}>🎯</div>
+            <div>
+              <div className="card-title">Surgical Strike</div>
+              <div className="card-desc">
+                Target a specific competitor — paste their product URL to find which golden filters can exclude them
               </div>
-            )}
-
-            {deepStatus === "error" && (
-              <div className="err-box" style={{ marginTop: "1rem" }}>
-                {deepError}
-                <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => handleDeepSearch(deepRange.min, deepRange.max)}
-                    style={{ flex: 1 }}
-                  >
-                    Retry
-                  </button>
-                  <button
-                    className="btn"
-                    onClick={() => setDeepStatus("idle")}
-                    style={{
-                      flex: 1,
-                      background: "rgba(255,255,255,0.05)",
-                      color: "var(--text2)",
-                      border: "1px solid var(--border)"
-                    }}
-                  >
-                    ← Back to Options
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {deepStatus === "done" && deepResults && (
-              <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.2rem" }}>
-                  <button
-                    onClick={() => setDeepStatus("idle")}
-                    style={{
-                      background: "transparent",
-                      border: "1px solid var(--border)",
-                      color: "var(--text2)",
-                      padding: "6px 12px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontSize: ".75rem",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      transition: "all 0.2s"
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.borderColor = "var(--primary)"}
-                    onMouseOut={(e) => e.currentTarget.style.borderColor = "var(--border)"}
-                  >
-                    <span>←</span> Back to Deep Search Options
-                  </button>
-
-                  <button
-                    onClick={exportToPDF}
-                    style={{
-                      background: "rgba(108, 92, 231, 0.15)",
-                      border: "1px solid var(--primary)",
-                      color: "var(--text)",
-                      padding: "6px 14px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontSize: ".75rem",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      fontWeight: 600,
-                      transition: "all 0.2s"
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.25)"}
-                    onMouseOut={(e) => e.currentTarget.style.background = "rgba(108, 92, 231, 0.15)"}
-                  >
-                    Export as PDF 📄
-                  </button>
-                </div>
-                <div className="deep-summary-row">
-                  <div className="deep-stat">
-                    <div className="deep-stat-val">{deepResults.combinations?.length ?? 0}</div>
-                    <div className="deep-stat-lbl">L1 Combos Found</div>
-                  </div>
-                  <div className="deep-stat">
-                    <div className="deep-stat-val">{deepResults.totalScraped ?? 0}</div>
-                    <div className="deep-stat-lbl">Re-Scrapes Done</div>
-                  </div>
-                  <div className="deep-stat">
-                    <div className="deep-stat-val">{deepResults.goldenFilterCount ?? 0}</div>
-                    <div className="deep-stat-lbl">Golden Filters</div>
-                  </div>
-                  {deepResults.truncated && (
-                    <div className="deep-stat deep-stat-warn">
-                      <div className="deep-stat-val">⚡</div>
-                      <div className="deep-stat-lbl">Search capped at 120 calls</div>
-                    </div>
-                  )}
-                </div>
-
-                {deepRange.max <= 10 && (
-                  <div style={{
-                    background: "rgba(156, 39, 176, 0.08)",
-                    border: "1px dashed rgba(156, 39, 176, 0.3)",
-                    borderRadius: "8px",
-                    padding: "0.8rem 1rem",
-                    marginBottom: "1.5rem",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    flexWrap: "wrap"
-                  }}>
-                    <div style={{ fontSize: ".8rem", color: "var(--text2)" }}>
-                      <strong style={{ color: "#9c27b0" }}>💡 Explore further?</strong> Standard search stopped at depth 10. Run an ultra-deep scan to find extreme combinations (11 to 15 filters).
-                    </div>
-                    <button
-                      onClick={() => handleDeepSearch(11, 15)}
-                      style={{
-                        background: "linear-gradient(135deg, var(--primary), #9c27b0)",
-                        border: "none", color: "#fff", fontSize: ".75rem", fontWeight: "bold",
-                        padding: "6px 14px", borderRadius: "6px", cursor: "pointer", boxShadow: "0 2px 6px rgba(0,0,0,0.2)"
-                      }}
-                    >
-                      ⚡ Scan Depths 11 - 15
-                    </button>
-                  </div>
-                )}
-
-                {deepResults.combinations?.length === 0 ? (
-                  <div className="empty" style={{ marginTop: "1rem" }}>
-                    <div className="empty-icon">🔍</div>
-                    <div className="empty-text">
-                      No L1 niches found even with cascading golden filters.<br />
-                      <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
-                        Try lowering your price.
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div style={{ fontSize: ".72rem", color: "var(--text3)", marginBottom: "1rem" }}>
-                      Found <strong>{deepResults.combinations.length}</strong> L1 winning combinations
-                      via live re-scraping — sorted by opportunity score:
-                    </div>
-                    {(() => {
-                      const depths = [...new Set(deepResults.combinations.map(c => c.depth))].sort((a, b) => a - b);
-                      const activeDepth = deepDepthTab !== null && depths.includes(deepDepthTab)
-                        ? deepDepthTab
-                        : depths[0];
-                      const group = deepResults.combinations.filter(c => c.depth === activeDepth);
-                      return (
-                        <>
-                          {/* Depth Tab Bar */}
-                          <div className="depth-tab-bar">
-                            {depths.map(d => {
-                              const cnt = deepResults.combinations.filter(c => c.depth === d).length;
-                              const isActive = d === activeDepth;
-                              return (
-                                <button
-                                  key={d}
-                                  className={`depth-tab-btn${isActive ? " depth-tab-active" : ""}`}
-                                  onClick={() => setDeepDepthTab(d)}
-                                >
-                                  <span className="depth-tab-label">Depth {d}</span>
-                                  <span className="depth-tab-count">{cnt}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-
-                          {/* Tab description */}
-                          <div className="depth-tab-desc">
-                            <span className="depth-badge">Depth {activeDepth}</span>
-                            &nbsp;— {activeDepth} golden filter{activeDepth > 1 ? "s" : ""} applied
-                            &nbsp;·&nbsp; <strong>{group.length}</strong> winning niche{group.length !== 1 ? "s" : ""}
-                          </div>
-
-                          {/* Combo cards for active depth */}
-                          {group.map((r, i) => (
-                            <OpportunityCard key={i} r={r} rank={i + 1} />
-                          ))}
-                        </>
-                      );
-                    })()}
-
-                    {/* Progress log toggle */}
-                    <details className="progress-log-details">
-                      <summary>View search log ({deepResults.progress?.length ?? 0} entries)</summary>
-                      <div className="progress-log">
-                        {(deepResults.progress ?? []).map((line, i) => (
-                          <div key={i} className={`log-line ${line.includes("✅") ? "log-win" :
-                            line.includes("Error") ? "log-err" :
-                              line.includes("[Done]") ? "log-done" :
-                                line.includes("deeper") ? "log-deeper" : ""
-                            }`}>
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-
-                    <button
-                      className="btn btn-primary"
-                      onClick={handleDeepSearch}
-                      style={{ marginTop: "1.5rem" }}
-                    >
-                      🔄 Re-run Deep Search
-                    </button>
-                  </>
-                )}
-              </>
-            )}
+            </div>
           </div>
+
+          <div style={{ display: "flex", gap: "12px", alignItems: "center", marginTop: "1rem" }}>
+            <input
+              type="text"
+              value={strikeUrl}
+              onChange={(e) => setStrikeUrl(e.target.value)}
+              placeholder="Paste competitor's GeM product URL (e.g. mkp.gem.gov.in/.../product-detail/...)"
+              onKeyDown={(e) => e.key === "Enter" && handleSurgicalStrike()}
+              style={{ flex: 1 }}
+              id="strike-url-input"
+            />
+            <button
+              className="chain-hunt-trigger"
+              onClick={handleSurgicalStrike}
+              disabled={!strikeUrl.trim() || strikeStatus === "loading"}
+              style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)", whiteSpace: "nowrap" }}
+            >
+              {strikeStatus === "loading" ? (
+                <><span className="spin" /> Analyzing...</>
+              ) : (
+                "🎯 Analyze Competitor"
+              )}
+            </button>
+          </div>
+
+          {/* Loading */}
+          {strikeStatus === "loading" && (
+            <div style={{ textAlign: "center", padding: "2rem 0" }}>
+              <span className="spin spin-amber" />
+              <div style={{ fontSize: ".85rem", color: "var(--text3)", marginTop: ".75rem" }}>
+                Fetching competitor specs and matching against golden filters...
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {strikeStatus === "error" && (
+            <div className="err-box" style={{ marginTop: "1rem" }}>
+              {strikeError}
+              <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
+                <button className="btn btn-primary" onClick={handleSurgicalStrike} style={{ flex: 1 }}>Retry</button>
+                <button className="btn" onClick={() => setStrikeStatus("idle")} style={{ flex: 1, background: "rgba(255,255,255,0.05)", color: "var(--text2)", border: "1px solid var(--border)" }}>Dismiss</button>
+              </div>
+            </div>
+          )}
+
+          {/* Results */}
+          {strikeStatus === "done" && strikeResults && (
+            <div style={{ marginTop: "1.25rem" }}>
+              {/* Competitor Info Header */}
+              <div style={{
+                background: "rgba(239, 68, 68, 0.06)",
+                border: "1px solid rgba(239, 68, 68, 0.2)",
+                borderRadius: "10px",
+                padding: "1rem 1.25rem",
+                marginBottom: "1rem",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--text4)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      Target Competitor
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: "0.95rem", marginTop: "2px" }}>
+                      {strikeResults.competitorName || "Unknown Product"}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    {strikeResults.competitorPrice && (
+                      <div style={{ fontWeight: 700, fontSize: "1rem", color: "#ef4444" }}>
+                        ₹{strikeResults.competitorPrice.toLocaleString()}
+                      </div>
+                    )}
+                    <div style={{ fontSize: "0.65rem", color: "var(--text4)" }}>
+                      {strikeResults.goldenMatches?.length ?? 0} golden filters matched · {strikeResults.totalApiCalls} API calls · {strikeResults.elapsed}s
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Golden Filter Matches */}
+              {strikeResults.goldenMatches?.length > 0 && (
+                <div style={{ marginBottom: "1rem" }}>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text2)", marginBottom: "0.5rem" }}>
+                    Competitor's Golden Filter Specs:
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                    {strikeResults.goldenMatches.map((m, idx) => (
+                      <div key={idx} style={{
+                        background: "rgba(251, 191, 36, 0.1)",
+                        border: "1px solid rgba(251, 191, 36, 0.25)",
+                        borderRadius: "6px",
+                        padding: "6px 10px",
+                        fontSize: "0.75rem",
+                      }}>
+                        <span style={{ color: "var(--text3)" }}>{m.filterName}:</span>{" "}
+                        <strong style={{ color: "var(--amber)" }}>{m.competitorValue}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Counter Filters */}
+              {strikeResults.counterFilters?.length > 0 ? (
+                <>
+                  <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text2)", marginBottom: "0.5rem" }}>
+                    Counter Filters ({strikeResults.wins} wins, {strikeResults.untapped} untapped):
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    {strikeResults.counterFilters.map((cf, idx) => (
+                      <div key={idx} style={{
+                        display: "flex", alignItems: "center", gap: "12px",
+                        background: cf.wouldWin
+                          ? "rgba(16, 185, 129, 0.08)"
+                          : cf.isUntapped
+                          ? "rgba(251, 191, 36, 0.08)"
+                          : "rgba(255,255,255,0.02)",
+                        border: `1px solid ${cf.wouldWin ? "rgba(16, 185, 129, 0.25)" : cf.isUntapped ? "rgba(251, 191, 36, 0.25)" : "var(--border)"}`,
+                        borderRadius: "8px",
+                        padding: "0.75rem 1rem",
+                      }}>
+                        <div style={{
+                          width: "32px", height: "32px", borderRadius: "50%",
+                          background: cf.wouldWin ? "rgba(16, 185, 129, 0.15)" : cf.isUntapped ? "rgba(251, 191, 36, 0.15)" : "rgba(255,255,255,0.05)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: "0.9rem", flexShrink: 0,
+                        }}>
+                          {cf.wouldWin ? "✅" : cf.isUntapped ? "★" : "→"}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: "0.8rem" }}>
+                            Set <strong>{cf.filterName}</strong> = <strong style={{ color: "var(--green)" }}>{cf.counterValue}</strong>
+                            <span style={{ color: "var(--text4)", fontSize: "0.7rem", marginLeft: "6px" }}>
+                              (competitor has: {cf.competitorValue})
+                            </span>
+                          </div>
+                          <div style={{ fontSize: "0.7rem", color: "var(--text3)", marginTop: "2px" }}>
+                            {cf.isUntapped
+                              ? "🏆 Zero competitors — untapped niche!"
+                              : cf.wouldWin
+                              ? `🏆 You'd be L1! Min price: ₹${cf.resultMinPrice?.toLocaleString()}, ${cf.resultTotal} products`
+                              : `Min price: ₹${cf.resultMinPrice?.toLocaleString() ?? "?"}, ${cf.resultTotal} products`}
+                          </div>
+                        </div>
+                        <div style={{
+                          fontSize: "0.65rem", fontWeight: 700, padding: "3px 8px",
+                          borderRadius: "4px",
+                          background: cf.wouldWin ? "rgba(16, 185, 129, 0.2)" : cf.isUntapped ? "rgba(251, 191, 36, 0.2)" : "rgba(255,255,255,0.05)",
+                          color: cf.wouldWin ? "var(--green)" : cf.isUntapped ? "var(--amber)" : "var(--text4)",
+                        }}>
+                          {cf.wouldWin ? "WIN" : cf.isUntapped ? "UNTAPPED" : "NO WIN"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : strikeResults.goldenMatches?.length === 0 ? (
+                <div className="empty" style={{ marginTop: "1rem" }}>
+                  <div className="empty-icon">⚠️</div>
+                  <div className="empty-text">
+                    Could not match any of the competitor's specs to golden filters.<br />
+                    <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
+                      The product page may have different spec names than the category filters.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="empty" style={{ marginTop: "1rem" }}>
+                  <div className="empty-icon">🎯</div>
+                  <div className="empty-text">
+                    No counter filters available — the competitor matches all golden filter values.
+                  </div>
+                </div>
+              )}
+
+              <button
+                className="chain-hunt-trigger"
+                onClick={handleSurgicalStrike}
+                style={{ marginTop: "1.5rem", background: "linear-gradient(135deg, #ef4444, #dc2626)" }}
+              >
+                🔄 Re-analyze
+              </button>
+            </div>
+          )}
         </div>
       )}
+
 
       {/* CHAIN HUNT RESULTS */}
       {chainStatus !== "idle" && (
