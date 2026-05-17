@@ -246,11 +246,12 @@ export default function App() {
   const [deepError, setDeepError] = useState("");
   const [deepDepthTab, setDeepDepthTab] = useState(null); // selected depth tab
 
-  // Targeted Elimination state
-  const [surpassUrl, setSurpassUrl] = useState("");
-  const [surpassResults, setSurpassResults] = useState(null);
-  const [surpassStatus, setSurpassStatus] = useState("idle");
-  const [surpassError, setSurpassError] = useState("");
+
+  // Chain Hunt state
+  const [chainStatus, setChainStatus] = useState("idle"); // idle | loading | done | error
+  const [chainResults, setChainResults] = useState(null);
+  const [chainError, setChainError] = useState("");
+  const [chainPathIdx, setChainPathIdx] = useState(0);
 
   const [deepRange, setDeepRange] = useState({ min: 3, max: 10 });
   const [mandatoryFilters, setMandatoryFilters] = useState([]);
@@ -281,9 +282,7 @@ export default function App() {
     setDeepStatus("idle");
     setDeepResults(null);
     setDeepError("");
-    setSurpassResults(null);
-    setSurpassUrl("");
-    setSurpassError("");
+
 
     // Auto-prepend https:// if user didn't include a protocol
     let normalizedUrl = gemUrl.trim();
@@ -361,35 +360,45 @@ export default function App() {
     }
   };
 
-  const handleSurpass = async () => {
-    if (!surpassUrl.trim() || !gemUrl.trim()) return;
-    setSurpassStatus("loading");
-    setSurpassResults(null);
-    setSurpassError("");
+  const handleChainHunt = async () => {
+    if (!gemUrl.trim() || !priceNum) return;
+    setChainStatus("loading");
+    setChainResults(null);
+    setChainError("");
+    setChainPathIdx(0);
+
+    let normalizedUrl = gemUrl.trim();
+    if (!normalizedUrl.startsWith("http://") && !normalizedUrl.startsWith("https://")) {
+      normalizedUrl = "https://" + normalizedUrl;
+    }
 
     try {
-      const res = await fetch(`${BACKEND_URL}/surpass`, {
+      const res = await fetch(`${BACKEND_URL}/chain-hunt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          category_url: gemUrl.trim(),
-          competitor_url: surpassUrl.trim(),
-          seller_price: priceNum,
+          category_url: normalizedUrl,
+          target_price: priceNum,
+          golden_filters: scrapedData
+            ? scrapedData.filters.filter((f) => f.isGolden)
+            : [],
           location: selectedLocation,
-          golden_filters: scrapedData?.filters?.filter(f => f.isGolden) || []
         }),
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.detail || "Competitor analysis failed");
+        throw new Error(
+          typeof err.detail === "object"
+            ? err.detail.message
+            : err.detail || "Chain hunt failed"
+        );
       }
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setSurpassResults(data);
-      setSurpassStatus("done");
+      setChainResults(data);
+      setChainStatus("done");
     } catch (e) {
-      setSurpassError(e.message || "Targeted search failed");
-      setSurpassStatus("error");
+      setChainError(e.message || "Chain hunt failed");
+      setChainStatus("error");
     }
   };
 
@@ -565,7 +574,18 @@ export default function App() {
               />
             </div>
             {priceNum > 0 && (
-              <div style={{ display: "flex", gap: "12px", marginLeft: "auto" }}>
+              <div style={{ display: "flex", gap: "12px", marginLeft: "auto", flexWrap: "wrap" }}>
+                <button
+                  className="chain-hunt-trigger"
+                  onClick={handleChainHunt}
+                  disabled={scrapeStatus !== "done" || chainStatus === "loading"}
+                >
+                  {chainStatus === "loading" ? (
+                    <><span className="spin" /> Hunting...</>
+                  ) : (
+                    "⚡ Smart L1 Hunt"
+                  )}
+                </button>
                 <button
                   className="btn btn-primary"
                   onClick={() => handleDeepSearch(3, 10)}
@@ -578,7 +598,7 @@ export default function App() {
                   onClick={() => handleDeepSearch(11, 15)}
                   disabled={scrapeStatus !== "done"}
                 >
-                  Ultra Deep Search(11-15)
+                  Ultra Deep (11-15)
                 </button>
               </div>
             )}
@@ -953,162 +973,223 @@ export default function App() {
                     >
                       🔄 Re-run Deep Search
                     </button>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
-                    <div className="surpass-card">
-                      <div className="surpass-title">
-                        <span>🎯</span> Surgical Competitive Strike
-                      </div>
-                      <div className="surpass-desc">
-                        Analyze any competitor product link. We'll find the exact filter to <strong>eliminate</strong> cheap competitors or the blueprint of specs to <strong>join and win</strong> a high-priced niche.
-                      </div>
-                      <div className="surpass-input-group">
-                        <input
-                          type="text"
-                          placeholder="https://mkp.gem.gov.in/interactive-panels-with-cpu/p-..."
-                          value={surpassUrl}
-                          onChange={(e) => setSurpassUrl(e.target.value)}
-                        />
-                        <button
-                          className="btn btn-surpass"
-                          onClick={handleSurpass}
-                          disabled={surpassStatus === "loading" || !surpassUrl.trim()}
-                        >
-                          {surpassStatus === "loading" ? <span className="spin" /> : "Fetch Strategy"}
-                        </button>
-                      </div>
+      {/* CHAIN HUNT RESULTS */}
+      {chainStatus !== "idle" && (
+        <div className="card fade-in fade-in-d2">
+          <div className="chain-hunt-panel">
+            {chainStatus === "loading" && (
+              <div className="chain-loading">
+                <span className="spin spin-amber" />
+                <div className="chain-loading-title">⚡ Sequential L1 Chain Hunt Running...</div>
+                <div className="chain-loading-sub">
+                  Iteratively eliminating each L1 blocker one-by-one.
+                  Re-scraping the market after every filter change.
+                  This may take 2–5 minutes.
+                </div>
+                <div className="chain-loading-bar">
+                  <div className="chain-loading-fill" />
+                </div>
+              </div>
+            )}
 
-                      {surpassError && (
-                        <div className="err-box" style={{ marginTop: "0.5rem" }}>
-                          {surpassError}
-                        </div>
-                      )}
+            {chainStatus === "error" && (
+              <div className="err-box" style={{ marginTop: "1rem" }}>
+                {chainError}
+                <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
+                  <button className="btn btn-primary" onClick={handleChainHunt} style={{ flex: 1 }}>Retry</button>
+                  <button className="btn" onClick={() => setChainStatus("idle")} style={{ flex: 1, background: "rgba(255,255,255,0.05)", color: "var(--text2)", border: "1px solid var(--border)" }}>← Back</button>
+                </div>
+              </div>
+            )}
 
-                      {surpassResults && (
-                        <div style={{ marginTop: "1.5rem" }}>
-                          {/* Competitor Info Header */}
-                          <div style={{ 
-                            padding: "1rem", 
-                            background: "var(--surface3)", 
-                            borderRadius: "8px", 
-                            border: "1px solid var(--border)",
-                            marginBottom: "1.25rem"
-                          }}>
-                            <div style={{ fontSize: ".65rem", color: "var(--text4)", fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "4px" }}>
-                              Targeted Competitor
-                            </div>
-                            <div style={{ fontSize: ".9rem", fontWeight: 700, color: "var(--text)", marginBottom: "8px", lineHeight: 1.3 }}>
-                              {surpassResults.competitor?.name || "Unknown Product"}
-                            </div>
-                            <div style={{ display: "flex", gap: "12px", alignItems: "baseline" }}>
-                              <div style={{ fontSize: "1.2rem", fontWeight: 800, color: "var(--red)" }}>
-                                ₹{surpassResults.competitor?.price?.toLocaleString() || "???"}
-                              </div>
-                              <a href={surpassResults.competitor?.url} target="_blank" rel="noreferrer" style={{ fontSize: ".7rem", color: "var(--accent2)", textDecoration: "none" }}>
-                                View on GeM ↗
-                              </a>
-                            </div>
-                          </div>
+            {chainStatus === "done" && chainResults && (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                  <button
+                    onClick={() => setChainStatus("idle")}
+                    style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text2)", padding: "6px 12px", borderRadius: "6px", cursor: "pointer", fontSize: ".75rem", display: "flex", alignItems: "center", gap: "6px", transition: "all 0.2s" }}
+                    onMouseOver={(e) => e.currentTarget.style.borderColor = "var(--primary)"}
+                    onMouseOut={(e) => e.currentTarget.style.borderColor = "var(--border)"}
+                  >
+                    <span>←</span> Back
+                  </button>
+                  <div style={{ fontSize: ".7rem", color: "var(--text3)" }}>
+                    ⚡ Sequential Chain Elimination
+                  </div>
+                </div>
 
-                          {/* Competitor Specs Section */}
-                          {surpassResults.matchedSpecs && surpassResults.matchedSpecs.length > 0 && (
-                            <div style={{ marginBottom: "1.5rem" }}>
-                              <div style={{ fontSize: ".65rem", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "8px" }}>
-                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
-                                Competitor Active Specs
-                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
-                              </div>
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
-                                {surpassResults.matchedSpecs.map((spec, idx) => (
-                                  <div key={idx} style={{ 
-                                    background: "var(--bg2)", 
-                                    padding: "8px 12px", 
-                                    borderRadius: "6px", 
-                                    border: "1px solid var(--border2)",
-                                    fontSize: ".75rem"
-                                  }}>
-                                    <div style={{ color: "var(--text4)", fontSize: ".6rem", fontWeight: 600, textTransform: "uppercase" }}>{spec.name}</div>
-                                    <div style={{ color: "var(--text2)", fontWeight: 500 }}>{spec.value}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
+                {/* Summary stats */}
+                <div className="chain-summary">
+                  <div className="chain-stat chain-stat-win">
+                    <div className="chain-stat-val">{chainResults.winningPaths?.length ?? 0}</div>
+                    <div className="chain-stat-lbl">Winning Paths</div>
+                  </div>
+                  <div className="chain-stat chain-stat-api">
+                    <div className="chain-stat-val">{chainResults.totalApiCalls ?? 0}</div>
+                    <div className="chain-stat-lbl">API Calls Used</div>
+                  </div>
+                  <div className="chain-stat">
+                    <div className="chain-stat-val">{chainResults.goldenFilterCount ?? 0}</div>
+                    <div className="chain-stat-lbl">Golden Filters</div>
+                  </div>
+                  <div className="chain-stat">
+                    <div className="chain-stat-val">{chainResults.status === "WIN" ? "✓" : chainResults.status === "PARTIAL" ? "⚠" : "✗"}</div>
+                    <div className="chain-stat-lbl">Status</div>
+                  </div>
+                </div>
 
-                          {/* Match Strategy Section (Joining a high-priced niche) */}
-                          {surpassResults.matchStrategy && (
-                            <div style={{ marginBottom: "1.5rem" }}>
-                              <div style={{ fontSize: ".65rem", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "8px" }}>
-                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
-                                Niche Winning Option (Join & Win)
-                                <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
-                              </div>
-                              <div className="killer-card" style={{ borderLeftColor: "var(--accent)", background: "var(--accent-glow)" }}>
-                                <div className="killer-info">
-                                  <div className="killer-tag" style={{ background: "var(--accent)", color: "#fff" }}>L1 Niche Entry</div>
-                                  <div className="killer-label" style={{ fontSize: ".9rem", marginTop: "4px" }}>
-                                    Match all filters of this <strong>high-priced product</strong> to dominate its niche.
-                                  </div>
-                                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "10px" }}>
-                                    {surpassResults.matchStrategy.filters.map((f, i) => (
-                                      <div key={i} style={{ 
-                                        background: "var(--bg3)", 
-                                        padding: "4px 8px", 
-                                        borderRadius: "4px", 
-                                        fontSize: ".65rem",
-                                        border: "1px solid rgba(108, 92, 231, 0.3)"
-                                      }}>
-                                        <span style={{ color: "var(--text3)" }}>{f.name}:</span> <span style={{ color: "var(--accent2)", fontWeight: 700 }}>{f.value}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                  <div style={{ fontSize: ".7rem", color: "var(--text2)", marginTop: "10px", fontStyle: "italic" }}>
-                                    Your price (₹{priceNum.toLocaleString()}) is significantly lower than the current L1 in this specific niche.
-                                  </div>
-                                </div>
-                                <div className="killer-price">
-                                  <div className="killer-price-val" style={{ color: "var(--accent2)" }}>
-                                    ₹{surpassResults.matchStrategy.minCompetitorPrice?.toLocaleString() || "???"}
-                                  </div>
-                                  <div className="killer-price-lbl">Current Niche L1</div>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Strategies Section (Elimination) */}
-                          <div style={{ fontSize: ".65rem", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".1em", marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "8px" }}>
-                            <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
-                            {surpassResults.competitor?.price < priceNum ? "Elimination Strategy (Way Forward)" : "Alternative Surgical Strikes"}
-                            <span style={{ width: "12px", height: "1px", background: "var(--border)" }}></span>
-                          </div>
-
-                          {surpassResults.strategies && surpassResults.strategies.length === 0 ? (
-                            <div className="warn-box">
-                              No single-step filters found to eliminate this competitor. They match all your golden filter options.
-                            </div>
-                          ) : (
-                            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                              {(surpassResults.strategies || []).map((s, idx) => (
-                                <div key={idx} className="killer-card" style={{ borderLeftColor: "var(--green)" }}>
-                                  <div className="killer-info">
-                                    <div className="killer-tag" style={{ background: "var(--green-glow)", color: "var(--green)" }}>Killer Filter Found</div>
-                                    <div className="killer-label" style={{ fontSize: ".9rem", marginTop: "4px" }}>
-                                      Change <strong>{s.filterName}</strong> to <span style={{ color: "var(--green)", fontWeight: 800 }}>{s.value}</span>
-                                    </div>
-                                  </div>
-                                  <div className="killer-price">
-                                    <div className="killer-price-val" style={{ color: "var(--green)" }}>
-                                      {s.minCompetitorPrice === null ? "Untapped" : `₹${s.minCompetitorPrice.toLocaleString()}`}
-                                    </div>
-                                    <div className="killer-price-lbl">New Niche Min Price</div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
+                {(!chainResults.winningPaths || chainResults.winningPaths.length === 0) ? (
+                  <div className="empty" style={{ marginTop: "1rem" }}>
+                    <div className="empty-icon">🔍</div>
+                    <div className="empty-text">
+                      No winning path found to make your product L1.<br />
+                      <span style={{ color: "var(--text4)", fontSize: ".8rem" }}>
+                        The current L1 products cannot be bypassed with available golden filters.
+                        Try lowering your price or check if additional filter options exist.
+                      </span>
                     </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Path selector tabs */}
+                    <div style={{ fontSize: ".72rem", color: "var(--text3)", marginBottom: ".75rem" }}>
+                      Found <strong>{chainResults.winningPaths.length}</strong> winning path{chainResults.winningPaths.length !== 1 ? "s" : ""} to L1 — select one to view the elimination chain:
+                    </div>
+                    <div className="chain-path-tabs">
+                      {chainResults.winningPaths.map((path, idx) => (
+                        <button
+                          key={idx}
+                          className={`chain-path-tab ${chainPathIdx === idx ? "chain-path-tab-active" : ""}`}
+                          onClick={() => setChainPathIdx(idx)}
+                        >
+                          Path {idx + 1}
+                          <span className="chain-path-badge">
+                            {path.iterations?.length ?? 0} step{(path.iterations?.length ?? 0) !== 1 ? "s" : ""}
+                          </span>
+                          {path.isUntapped && <span style={{ color: "var(--amber)", fontSize: ".65rem" }}>★</span>}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Active path timeline */}
+                    {(() => {
+                      const path = chainResults.winningPaths[chainPathIdx];
+                      if (!path) return null;
+                      const steps = path.iterations || [];
+                      return (
+                        <div className="chain-timeline">
+                          {steps.map((step, idx) => (
+                            <div key={idx} className="chain-step" style={{ animationDelay: `${idx * 0.08}s` }}>
+                              {/* Node circle */}
+                              <div className="chain-node chain-node-blocker">{idx + 1}</div>
+
+                              {/* Blocker card */}
+                              <div className="chain-blocker-card">
+                                <div className="chain-blocker-header">
+                                  <div className="chain-blocker-tag">⛔ Competitors at Floor Price</div>
+                                  <div className="chain-blocker-price">₹{step.prevMinPrice?.toLocaleString()}</div>
+                                </div>
+                                <div className="chain-blocker-name" style={{ color: "var(--text3)", fontStyle: "italic", fontSize: "0.8rem" }}>
+                                  Current market minimum price
+                                </div>
+
+                                {/* Filter action */}
+                                <div className="chain-filter-action">
+                                  <div className="chain-filter-icon">🎯</div>
+                                  <div className="chain-filter-text">
+                                    Apply <strong>"{step.filterApplied?.filterName}"</strong> = <strong>"{step.filterApplied?.value}"</strong>
+                                  </div>
+                                </div>
+
+                                {/* New L1 preview */}
+                                {step.newMinPrice !== null && step.newMinPrice !== undefined && (
+                                  <div className="chain-new-l1">
+                                    → Price floor raised to: <strong>₹{step.newMinPrice?.toLocaleString()}</strong>
+                                    <span style={{ marginLeft: "auto", fontSize: ".65rem" }}>
+                                      {step.newTotal} products remain
+                                    </span>
+                                  </div>
+                                )}
+                                {step.result === "UNTAPPED" && (
+                                  <div className="chain-new-l1" style={{ color: "var(--amber)" }}>
+                                    → Niche is now <strong>untapped</strong> — zero competitors!
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Victory/Partial card */}
+                          <div className="chain-step" style={{ animationDelay: `${steps.length * 0.08}s` }}>
+                            <div className={`chain-node ${path.isUntapped ? "chain-node-untapped" : path.status === "PARTIAL" ? "chain-node-partial" : "chain-node-victory"}`}>
+                                {path.status === "PARTIAL" ? "⚠" : "✓"}
+                            </div>
+                            <div className="chain-victory-card" style={path.status === "PARTIAL" ? { borderColor: "var(--amber)", background: "rgba(251, 191, 36, 0.05)" } : {}}>
+                              <div className="chain-victory-header">
+                                <div className="chain-victory-tag">
+                                  {path.isUntapped 
+                                    ? "🏆 Untapped Niche" 
+                                    : path.status === "PARTIAL" 
+                                        ? "⚠ Stuck - Cannot Reach Target" 
+                                        : "🏆 You Are L1!"}
+                                </div>
+                                <div className="chain-victory-price">
+                                  {path.isUntapped
+                                    ? "No Competitors"
+                                    : `Max Price Reached: ₹${path.nicheMinPrice?.toLocaleString() ?? "?"}`}
+                                </div>
+                              </div>
+                              <div className="chain-victory-detail">
+                                {path.status === "PARTIAL" ? (
+                                    <>
+                                        After <strong>{steps.length} elimination{steps.length !== 1 ? "s" : ""}</strong>, 
+                                        the highest price floor reachable is <strong>₹{path.nicheMinPrice?.toLocaleString() ?? "?"}</strong>. 
+                                        No further filters can raise the price above your target of <strong>₹{priceNum.toLocaleString()}</strong>.
+                                    </>
+                                ) : (
+                                    <>
+                                        After <strong>{steps.length} elimination{steps.length !== 1 ? "s" : ""}</strong>,
+                                        your product at <strong>₹{priceNum.toLocaleString()}</strong> is now the cheapest.
+                                        {!path.isUntapped && path.nicheMinPrice && (
+                                        <> Price gap: <strong>₹{(path.nicheMinPrice - priceNum).toLocaleString()}</strong></>
+                                        )}
+                                        {path.totalProducts > 0 && (
+                                        <> · <strong>{path.totalProducts}</strong> products in niche</>
+                                        )}
+                                    </>
+                                )}
+                              </div>
+                              <div className="chain-active-filters">
+                                {Object.entries(path.activeFilters || {}).map(([key, val]) => {
+                                  const gf = scrapedData?.filters?.find(f => f.filterKey === key);
+                                  return (
+                                    <div key={key} className="chain-filter-chip">
+                                      {gf?.filterName || key}: <strong>{val}</strong>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <button
+                      className="chain-hunt-trigger"
+                      onClick={handleChainHunt}
+                      style={{ marginTop: "1.5rem" }}
+                    >
+                      🔄 Re-run Chain Hunt
+                    </button>
                   </>
                 )}
               </>

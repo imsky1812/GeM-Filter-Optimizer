@@ -66,10 +66,9 @@ class FindL1Request(BaseModel):
     mandatory_filters: Optional[list] = []
 
 
-class SurpassRequest(BaseModel):
+class ChainHuntRequest(BaseModel):
     category_url: str
-    competitor_url: str
-    seller_price: int
+    target_price: int
     golden_filters: list
     location: Optional[str] = ""
 
@@ -373,21 +372,37 @@ def _analyze(products: list, seller_price: int, seller_specs: dict, filters: lis
     return sorted(results, key=lambda r: r["score"], reverse=True)
 
 
-@app.post("/surpass")
-def surpass_competitor(req: SurpassRequest):
+
+@app.post("/chain-hunt")
+def chain_hunt(req: ChainHuntRequest):
+    """
+    Sequential L1 Chain Surpasser.
+    Iteratively eliminates each L1 blocker one-by-one through golden filter
+    application, re-evaluating the market after each change, until the
+    user's product becomes L1.
+    """
+    if req.target_price <= 0:
+        raise HTTPException(status_code=400, detail="target_price must be > 0.")
+
+    golden = req.golden_filters
+    if not golden:
+        raise HTTPException(
+            status_code=422,
+            detail="No golden filters provided. Run category scrape first."
+        )
+
     try:
         scraper = GeMScraper()
-        result = scraper.surpass_competitor(
+        result = scraper.smart_l1_discovery(
             category_url=req.category_url,
-            competitor_url=req.competitor_url,
-            seller_price=req.seller_price,
-            golden_filters=req.golden_filters,
+            target_price=req.target_price,
+            golden_filters=golden,
             location=req.location or ""
         )
         return result
     except Exception as e:
-        logger.error(f"Surpass failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Chain hunt failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Chain hunt failed: {str(e)}")
 
 
 # ── PRODUCTION STATIC FILE MOUNT ───────────────────────────────────────────────
