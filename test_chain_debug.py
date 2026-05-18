@@ -10,8 +10,8 @@ sys.path.insert(0, "backend")
 from scraper import GeMScraper
 
 scraper = GeMScraper()
-url = "https://mkp.gem.gov.in/service-industry-machinery-and-equipment-and-supplies-vending-machines-piece-and-part-vending-machines-sanitary-napkins-vending-machines/search"
-target = 34000
+url = "https://mkp.gem.gov.in/furniture-and-furnishings-accommodation-furniture-furniture-revolving-chair-v5-/search#/?q=REVOLVING%20CHAIR"
+target = 12000
 
 # Quick scrape for golden filters
 data = scraper.scrape(url)
@@ -55,3 +55,5 @@ for i, path in enumerate(result.get("winningPaths", [])[:5]):
         mp = path.get("nicheMinPrice")
         print(f"  RESULT: WIN - YOU ARE L1! Next cheapest: Rs {mp:,}, products={path.get('totalProducts')}")
     print(f"  Filters: {path.get('activeFilters')}")
+    if "competitorInsights" in path:
+        print(f"  Insights: {path['competitorInsights']}")

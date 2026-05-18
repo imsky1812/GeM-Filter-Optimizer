@@ -940,6 +940,50 @@ export default function App() {
                                   );
                                 })}
                               </div>
+                              
+                              {/* Competitor Insights */}
+                              {path.competitorInsights && (
+                                <div style={{
+                                  marginTop: "1.25rem",
+                                  padding: "1rem",
+                                  background: "var(--surface1)",
+                                  borderRadius: "8px",
+                                  border: "1px solid var(--border)",
+                                }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "0.75rem" }}>
+                                    <span style={{ fontSize: "1.1rem" }}>🕵️</span>
+                                    <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text1)" }}>Competitor Insights</span>
+                                  </div>
+                                  <div style={{ fontSize: "0.75rem", color: "var(--text2)", marginBottom: "1rem", fontStyle: "italic" }}>
+                                    {path.competitorInsights.message}
+                                  </div>
+                                  
+                                  {(path.competitorInsights.l2 || path.competitorInsights.l3) && (
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                                      {path.competitorInsights.l2 && (
+                                        <div style={{ padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.05)", overflow: "hidden" }}>
+                                          <div style={{ fontSize: "0.65rem", color: "var(--amber)", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px" }}>L2 Product</div>
+                                          <div style={{ fontSize: "0.8rem", color: "var(--text1)", fontWeight: 600, marginBottom: "2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={path.competitorInsights.l2.name}>{path.competitorInsights.l2.name}</div>
+                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "6px" }}>
+                                            <span style={{ fontSize: "0.7rem", color: "var(--text3)", background: "rgba(255,255,255,0.1)", padding: "2px 6px", borderRadius: "4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "50%" }}>{path.competitorInsights.l2.brand || "Unknown Brand"}</span>
+                                            <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#ef4444" }}>₹{path.competitorInsights.l2.price.toLocaleString()}</span>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {path.competitorInsights.l3 && (
+                                        <div style={{ padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.05)", overflow: "hidden" }}>
+                                          <div style={{ fontSize: "0.65rem", color: "var(--amber)", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px" }}>L3 Product</div>
+                                          <div style={{ fontSize: "0.8rem", color: "var(--text1)", fontWeight: 600, marginBottom: "2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={path.competitorInsights.l3.name}>{path.competitorInsights.l3.name}</div>
+                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "6px" }}>
+                                            <span style={{ fontSize: "0.7rem", color: "var(--text3)", background: "rgba(255,255,255,0.1)", padding: "2px 6px", borderRadius: "4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "50%" }}>{path.competitorInsights.l3.brand || "Unknown Brand"}</span>
+                                            <span style={{ fontSize: "0.8rem", fontWeight: 700, color: "#ef4444" }}>₹{path.competitorInsights.l3.price.toLocaleString()}</span>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>

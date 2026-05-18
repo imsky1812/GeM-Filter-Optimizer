@@ -194,6 +194,41 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         api_calls[0] += 1
         return result
 
+    def _extract_competitor_insights(products, t_price):
+        if not products:
+            return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
+        
+        valid_products = [p for p in products if p["price"] > t_price]
+        valid_products.sort(key=lambda x: x["price"])
+        if len(valid_products) == 0:
+            return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
+            
+        l2 = valid_products[0]
+        l2_brand = l2.get("brand", "").strip().lower()
+        
+        if len(valid_products) == 1:
+            return {"message": "no L2 and L3 on this path", "l2": l2, "l3": None}
+            
+        l3 = None
+        for p in valid_products[1:]:
+            p_brand = p.get("brand", "").strip().lower()
+            if p_brand != l2_brand and p_brand != "":
+                l3 = p
+                break
+                
+        if l3:
+            return {
+                "message": f"L2 and L3 found with their product names: {l2['name']} and {l3['name']}",
+                "l2": l2,
+                "l3": l3
+            }
+        else:
+            return {
+                "message": "found L2 and L3 but of same brands",
+                "l2": l2,
+                "l3": valid_products[1]
+            }
+
     logger.info(f"[ChainHunt] Starting: target=Rs {target_price}, "
                 f"golden_filters={len(golden_list)}")
 
@@ -231,6 +266,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             current_min = state["min_price"]
             current_total = state["total"]
             current_sellers = state["seller_count"]
+            current_products = state.get("products", [])
 
             # 2. WIN conditions
             if current_min is None or current_total == 0:
@@ -244,6 +280,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                     "totalProducts": current_total,
                     "sellerCount": current_sellers,
                     "chainLength": len(used_keys),
+                    "competitorInsights": {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
                 }
 
             if current_min > target_price:
@@ -257,6 +294,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                     "totalProducts": current_total,
                     "sellerCount": current_sellers,
                     "chainLength": len(used_keys),
+                    "competitorInsights": _extract_competitor_insights(current_products, target_price)
                 }
 
             # 3. Find the BEST filter to raise min_price
@@ -378,6 +416,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                                         "new_min": new_min,
                                         "total": new_total,
                                         "sellers": new_sellers,
+                                        "products": test.get("products", [])
                                     }
                             continue
 
@@ -390,6 +429,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                                 "new_min": new_min,
                                 "total": new_total,
                                 "sellers": new_sellers,
+                                "products": test.get("products", [])
                             }
 
                         # If this value already makes us L1, stop processing remaining futures
@@ -465,6 +505,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                     "totalProducts": best_candidate["total"],
                     "sellerCount": best_candidate["sellers"],
                     "chainLength": len(used_keys),
+                    "competitorInsights": _extract_competitor_insights(best_candidate.get("products", []), target_price)
                 }
 
         # If we get here, we're stuck.
@@ -483,6 +524,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 "totalProducts": last_step.get("newTotal", current_total),
                 "sellerCount": last_step.get("sellerCount", 0),
                 "chainLength": len(used_keys),
+                "competitorInsights": _extract_competitor_insights(current_products, target_price)
             })
 
         # Also return the untapped fallback if we found one
