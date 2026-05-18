@@ -10,8 +10,8 @@ sys.path.insert(0, "backend")
 from scraper import GeMScraper
 
 scraper = GeMScraper()
-url = "https://mkp.gem.gov.in/furniture-and-furnishings-accommodation-furniture-furniture-revolving-chair-v5-/search"
-target = 12000
+url = "https://mkp.gem.gov.in/service-industry-machinery-and-equipment-and-supplies-vending-machines-piece-and-part-vending-machines-sanitary-napkins-vending-machines/search"
+target = 34000
 
 # Quick scrape for golden filters
 data = scraper.scrape(url)

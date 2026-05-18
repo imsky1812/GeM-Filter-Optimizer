@@ -15,6 +15,8 @@ Key insight: we don't check if a "specific product" disappeared.
 We check if the MINIMUM PRICE went UP. That's the only thing that matters.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import json
 import time
 import logging
@@ -164,7 +166,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                        pre-apply before the chain begins.
     """
     MAX_API_CALLS = 500
-    MAX_TIME = 180  # seconds
+    MAX_TIME = 600  # seconds
 
     api_calls = [0]
     t_start = time.time()
@@ -267,6 +269,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             best_candidate = None  # {key, name, value, new_min, total, sellers}
             lateral_best = None    # best lateral move (narrows pool, no price gain)
 
+            tasks = []
             for gf in golden_list:
                 if not _budget_ok():
                     break
@@ -289,92 +292,111 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
 
                     tentative = dict(active)
                     tentative[gf_key] = val
+                    tasks.append({
+                        "gf": gf,
+                        "val": val,
+                        "tentative": tentative
+                    })
 
-                    test = _do_scrape(tentative)
-                    if test["error"]:
-                        continue
+            if tasks:
+                with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as executor:
+                    future_to_task = {}
+                    for task in tasks:
+                        future_to_task[executor.submit(_do_scrape, task["tentative"])] = task
+                    
+                    for fut in as_completed(future_to_task):
+                        if not _budget_ok():
+                            break
+                            
+                        task = future_to_task[fut]
+                        gf = task["gf"]
+                        gf_key = gf["filterKey"]
+                        val = task["val"]
+                        
+                        try:
+                            test = fut.result()
+                        except Exception:
+                            continue
 
-                    new_min = test["min_price"]
-                    new_total = test["total"]
-                    new_sellers = test["seller_count"]
+                        if test["error"]:
+                            continue
 
-                    # Untapped niche — save as fallback but DON'T return yet.
-                    # We prefer paths where products exist but we're L1.
-                    if new_min is None or new_total == 0:
-                        if untapped_fallback is None:
-                            untapped_fallback = {
-                                "step": {
-                                    "iteration": depth + 1,
-                                    "prevMinPrice": current_min,
-                                    "filterApplied": {
-                                        "filterKey": gf_key,
-                                        "filterName": gf["filterName"],
-                                        "value": val,
+                        new_min = test["min_price"]
+                        new_total = test["total"]
+                        new_sellers = test["seller_count"]
+
+                        # Untapped niche — save as fallback but DON'T return yet.
+                        if new_min is None or new_total == 0:
+                            if untapped_fallback is None:
+                                untapped_fallback = {
+                                    "step": {
+                                        "iteration": depth + 1,
+                                        "prevMinPrice": current_min,
+                                        "filterApplied": {
+                                            "filterKey": gf_key,
+                                            "filterName": gf["filterName"],
+                                            "value": val,
+                                        },
+                                        "result": "UNTAPPED",
+                                        "newMinPrice": None,
+                                        "newTotal": 0,
                                     },
-                                    "result": "UNTAPPED",
-                                    "newMinPrice": None,
-                                    "newTotal": 0,
-                                },
-                                "path": {
-                                    "iterations": steps[:],
-                                    "activeFilters": tentative,
-                                    "status": "WIN",
-                                    "isUntapped": True,
-                                    "nicheMinPrice": None,
-                                    "totalProducts": 0,
-                                    "sellerCount": 0,
-                                    "chainLength": len(used_keys) + 1,
-                                },
-                            }
-                        continue  # Keep searching for non-untapped wins!
-
-                    # Log what we found for debugging
-                    logger.debug(
-                        f"[ChainHunt]   {gf['filterName']}={val}: "
-                        f"min=Rs {new_min}, total={new_total}"
-                    )
-
-                    # Skip if total products is too low (niche too narrow)
-                    # At deeper depths the pool is already narrow, so relax the threshold
-                    min_products = 3 if depth <= 1 else 1
-                    if new_total < min_products:
-                        logger.debug(f"[ChainHunt]   -> SKIP: only {new_total} products")
-                        continue
-
-                    # STRICT PROGRESS: new min must be HIGHER than current min
-                    if new_min <= current_min:
-                        # No price progress, but track as a LATERAL candidate
-                        # (narrows the pool, which may enable price progress later)
-                        if new_total < current_total and new_total >= 1:
-                            if lateral_best is None or new_total < lateral_best["total"]:
-                                lateral_best = {
-                                    "key": gf_key,
-                                    "name": gf["filterName"],
-                                    "value": val,
-                                    "new_min": new_min,
-                                    "total": new_total,
-                                    "sellers": new_sellers,
+                                    "path": {
+                                        "iterations": steps[:],
+                                        "activeFilters": task["tentative"],
+                                        "status": "WIN",
+                                        "isUntapped": True,
+                                        "nicheMinPrice": None,
+                                        "totalProducts": 0,
+                                        "sellerCount": 0,
+                                        "chainLength": len(used_keys) + 1,
+                                    },
                                 }
-                        continue
+                            continue
 
-                    # Check if this is BETTER than our current best candidate
-                    if best_candidate is None or new_min > best_candidate["new_min"]:
-                        best_candidate = {
-                            "key": gf_key,
-                            "name": gf["filterName"],
-                            "value": val,
-                            "new_min": new_min,
-                            "total": new_total,
-                            "sellers": new_sellers,
-                        }
+                        # Log what we found for debugging
+                        logger.debug(
+                            f"[ChainHunt]   {gf['filterName']}={val}: "
+                            f"min=Rs {new_min}, total={new_total}"
+                        )
 
-                    # If this value already makes us L1, stop searching
-                    if new_min > target_price:
-                        break
+                        # Skip if total products is too low (niche too narrow)
+                        min_products = 3 if depth <= 1 else 1
+                        if new_total < min_products:
+                            logger.debug(f"[ChainHunt]   -> SKIP: only {new_total} products")
+                            continue
 
-                # If we found an L1 winner, no need to test more filters
-                if best_candidate and best_candidate["new_min"] > target_price:
-                    break
+                        # STRICT PROGRESS: new min must be HIGHER than current min
+                        if new_min <= current_min:
+                            # No price progress, but track as a LATERAL candidate
+                            if new_total < current_total and new_total >= 1:
+                                if lateral_best is None or new_total < lateral_best["total"]:
+                                    lateral_best = {
+                                        "key": gf_key,
+                                        "name": gf["filterName"],
+                                        "value": val,
+                                        "new_min": new_min,
+                                        "total": new_total,
+                                        "sellers": new_sellers,
+                                    }
+                            continue
+
+                        # Check if this is BETTER than our current best candidate
+                        if best_candidate is None or new_min > best_candidate["new_min"]:
+                            best_candidate = {
+                                "key": gf_key,
+                                "name": gf["filterName"],
+                                "value": val,
+                                "new_min": new_min,
+                                "total": new_total,
+                                "sellers": new_sellers,
+                            }
+
+                        # If this value already makes us L1, stop processing remaining futures
+                        if best_candidate["new_min"] > target_price:
+                            for f in future_to_task:
+                                f.cancel()
+                            break
 
             # 4. Apply the best candidate
             if best_candidate is None:
