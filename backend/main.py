@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from scraper import GeMScraper
+from l1_surpasser import L1ChainSurpasser
 import hashlib
 import time
 import logging
@@ -50,6 +51,9 @@ class ScrapeRequest(BaseModel):
     url: str
     location: Optional[str] = ""
 
+class ProductSpecRequest(BaseModel):
+    product_url: str
+
 class ChainHuntRequest(BaseModel):
     category_url: str
     target_price: int
@@ -64,6 +68,11 @@ class SurgicalStrikeRequest(BaseModel):
     target_price: int
     golden_filters: list
     location: Optional[str] = ""
+
+class L1SurpassRequest(BaseModel):
+    category_url: str
+    my_catalogue_id: str
+    my_price: int
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -177,6 +186,23 @@ def chain_hunt(req: ChainHuntRequest):
         raise HTTPException(status_code=500, detail=f"Chain hunt failed: {str(e)}")
 
 
+# ── Product Specifications ───────────────────────────────────────────────────
+
+@app.post("/product-specs")
+def get_product_specs(req: ProductSpecRequest):
+    """
+    Scrape live specifications for a single product.
+    Used for Clickable Competitor L2/L3 insights.
+    """
+    try:
+        scraper = GeMScraper()
+        # _scrape_product_page requires two arguments: url and variant_id
+        product_data = scraper._scrape_product_page(req.product_url, "")
+        return {"status": "success", "specs": product_data.get("specs", {})}
+    except Exception as e:
+        logger.error(f"Failed to scrape specs for {req.product_url}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ── Surgical Strike ──────────────────────────────────────────────────────────
 
 @app.post("/surgical-strike")
@@ -207,6 +233,36 @@ def surgical_strike(req: SurgicalStrikeRequest):
     except Exception as e:
         logger.error(f"Surgical strike failed: {e}")
         raise HTTPException(status_code=500, detail=f"Surgical strike failed: {str(e)}")
+
+
+# ── L1 Chain Surpasser (Hardened Engine) ────────────────────────────────────
+
+@app.post("/l1-surpass")
+def l1_surpass(req: L1SurpassRequest):
+    """
+    Hardened L1 Chain Surpasser.
+    Sequential filter elimination with full-category scrapes,
+    offset-drift detection, deduplication, and structured logging.
+    """
+    if req.my_price <= 0:
+        raise HTTPException(status_code=400, detail="my_price must be > 0.")
+    if not req.category_url.strip():
+        raise HTTPException(status_code=400, detail="category_url is required.")
+
+    try:
+        surpasser = L1ChainSurpasser(
+            category_url=req.category_url,
+            my_catalogue_id=req.my_catalogue_id,
+            my_price=req.my_price,
+        )
+        result = surpasser.run()
+        return result
+    except Exception as e:
+        logger.error(f"L1 Surpass failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"L1 Chain Surpasser failed: {str(e)}"
+        )
 
 
 # ── PRODUCTION STATIC FILE MOUNT ───────────────────────────────────────────────

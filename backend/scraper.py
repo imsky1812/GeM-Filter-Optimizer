@@ -1041,6 +1041,7 @@ class GeMScraper:
         2. Use inline specs already extracted from the listing JSON
         3. Only visit product detail pages for golden filters STILL missing values
            — prioritise cheapest products (most relevant for L1 analysis)
+
         """
         name_to_code = {fd["filterName"]: fd["filterKey"] for fd in facet_defs}
 

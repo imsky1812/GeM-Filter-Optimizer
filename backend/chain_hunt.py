@@ -79,6 +79,7 @@ def _chain_scrape(self, url: str, extra_params: dict, location: str = "") -> dic
             "seller": cat.get("seller", {}).get("name", ""),
             "seller_id": sid,
             "brand": cat.get("brand", ""),
+            "url": self._build_product_url(cat),
         })
 
     # Also fetch page 2 for better seller diversity count
@@ -101,6 +102,7 @@ def _chain_scrape(self, url: str, extra_params: dict, location: str = "") -> dic
                         "seller": cat.get("seller", {}).get("name", ""),
                         "seller_id": sid,
                         "brand": cat.get("brand", ""),
+                        "url": self._build_product_url(cat),
                     })
         except Exception:
             pass

@@ -29,6 +29,43 @@ export default function App() {
   const [mandatoryFilters, setMandatoryFilters] = useState([]);
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [hoveredFilterKey, setHoveredFilterKey] = useState(null);
+  
+  // Competitor Specs Modal State
+  const [selectedCompetitor, setSelectedCompetitor] = useState(null);
+  const [competitorSpecs, setCompetitorSpecs] = useState(null);
+  const [isFetchingSpecs, setIsFetchingSpecs] = useState(false);
+  const [competitorSpecsError, setCompetitorSpecsError] = useState("");
+
+  const handleFetchCompetitorSpecs = async (competitor, role) => {
+    if (!competitor.url) {
+      alert("Product URL not available. Ensure you run the Chain Hunt to get product URLs.");
+      return;
+    }
+    
+    setSelectedCompetitor({ ...competitor, role });
+    setCompetitorSpecs(null);
+    setIsFetchingSpecs(true);
+    setCompetitorSpecsError("");
+    
+    try {
+      const res = await fetch(`${BACKEND_URL}/product-specs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_url: competitor.url }),
+      });
+      
+      if (!res.ok) {
+        throw new Error("Failed to fetch product specifications");
+      }
+      
+      const data = await res.json();
+      setCompetitorSpecs(data.specs || {});
+    } catch (e) {
+      setCompetitorSpecsError(e.message || "Failed to fetch specs");
+    } finally {
+      setIsFetchingSpecs(false);
+    }
+  };
 
 
   // Fetch locations on mount
@@ -961,8 +998,24 @@ export default function App() {
                                   {(path.competitorInsights.l2 || path.competitorInsights.l3) && (
                                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
                                       {path.competitorInsights.l2 && (
-                                        <div style={{ padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.05)", overflow: "hidden" }}>
-                                          <div style={{ fontSize: "0.65rem", color: "var(--amber)", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px" }}>L2 Product</div>
+                                        <div 
+                                          style={{ 
+                                            padding: "0.75rem", 
+                                            background: "rgba(255,255,255,0.03)", 
+                                            borderRadius: "6px", 
+                                            border: "1px solid rgba(255,255,255,0.05)", 
+                                            overflow: "hidden",
+                                            cursor: "pointer",
+                                            transition: "background 0.2s"
+                                          }}
+                                          onClick={() => handleFetchCompetitorSpecs(path.competitorInsights.l2, "L2")}
+                                          onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.08)"}
+                                          onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
+                                        >
+                                          <div style={{ fontSize: "0.65rem", color: "var(--amber)", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px", display: "flex", justifyContent: "space-between" }}>
+                                            <span>L2 Product</span>
+                                            <span style={{ fontSize: "0.6rem", color: "var(--text3)", fontWeight: 400 }}>Click to view specs</span>
+                                          </div>
                                           <div style={{ fontSize: "0.8rem", color: "var(--text1)", fontWeight: 600, marginBottom: "2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={path.competitorInsights.l2.name}>{path.competitorInsights.l2.name}</div>
                                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "6px" }}>
                                             <span style={{ fontSize: "0.7rem", color: "var(--text3)", background: "rgba(255,255,255,0.1)", padding: "2px 6px", borderRadius: "4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "50%" }}>{path.competitorInsights.l2.brand || "Unknown Brand"}</span>
@@ -971,8 +1024,24 @@ export default function App() {
                                         </div>
                                       )}
                                       {path.competitorInsights.l3 && (
-                                        <div style={{ padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "6px", border: "1px solid rgba(255,255,255,0.05)", overflow: "hidden" }}>
-                                          <div style={{ fontSize: "0.65rem", color: "var(--amber)", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px" }}>L3 Product</div>
+                                        <div 
+                                          style={{ 
+                                            padding: "0.75rem", 
+                                            background: "rgba(255,255,255,0.03)", 
+                                            borderRadius: "6px", 
+                                            border: "1px solid rgba(255,255,255,0.05)", 
+                                            overflow: "hidden",
+                                            cursor: "pointer",
+                                            transition: "background 0.2s"
+                                          }}
+                                          onClick={() => handleFetchCompetitorSpecs(path.competitorInsights.l3, "L3")}
+                                          onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.08)"}
+                                          onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
+                                        >
+                                          <div style={{ fontSize: "0.65rem", color: "var(--amber)", fontWeight: 700, textTransform: "uppercase", marginBottom: "4px", display: "flex", justifyContent: "space-between" }}>
+                                            <span>L3 Product</span>
+                                            <span style={{ fontSize: "0.6rem", color: "var(--text3)", fontWeight: 400 }}>Click to view specs</span>
+                                          </div>
                                           <div style={{ fontSize: "0.8rem", color: "var(--text1)", fontWeight: 600, marginBottom: "2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={path.competitorInsights.l3.name}>{path.competitorInsights.l3.name}</div>
                                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "6px" }}>
                                             <span style={{ fontSize: "0.7rem", color: "var(--text3)", background: "rgba(255,255,255,0.1)", padding: "2px 6px", borderRadius: "4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "50%" }}>{path.competitorInsights.l3.brand || "Unknown Brand"}</span>
@@ -1000,6 +1069,131 @@ export default function App() {
                   </>
                 )}
               </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Competitor Specs Modal */}
+      {selectedCompetitor && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          width: "100vw",
+          height: "100vh",
+          backgroundColor: "rgba(0, 0, 0, 0.7)",
+          backdropFilter: "blur(4px)",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          zIndex: 1000,
+          padding: "1rem"
+        }} onClick={() => setSelectedCompetitor(null)}>
+          <div style={{
+            background: "var(--surface0)",
+            border: "1px solid var(--border)",
+            borderRadius: "12px",
+            width: "100%",
+            maxWidth: "600px",
+            maxHeight: "90vh",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)"
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ 
+              padding: "1.5rem", 
+              borderBottom: "1px solid var(--border)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start"
+            }}>
+              <div>
+                <div style={{ fontSize: "0.75rem", color: "var(--amber)", fontWeight: 700, textTransform: "uppercase", marginBottom: "0.5rem" }}>
+                  {selectedCompetitor.role} Competitor Specs
+                </div>
+                <h3 style={{ margin: 0, fontSize: "1.1rem", color: "var(--text1)", lineHeight: 1.4 }}>
+                  {selectedCompetitor.name}
+                </h3>
+                <div style={{ display: "flex", gap: "1rem", marginTop: "0.75rem", fontSize: "0.9rem" }}>
+                  <span style={{ color: "var(--text2)" }}>Brand: <strong style={{ color: "var(--text1)" }}>{selectedCompetitor.brand || "Unknown"}</strong></span>
+                  <span style={{ color: "var(--text2)" }}>Price: <strong style={{ color: "#ef4444" }}>₹{selectedCompetitor.price.toLocaleString()}</strong></span>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedCompetitor(null)}
+                style={{ 
+                  background: "transparent", 
+                  border: "none", 
+                  color: "var(--text2)", 
+                  cursor: "pointer",
+                  fontSize: "1.5rem",
+                  lineHeight: 1,
+                  padding: "0 0.5rem"
+                }}
+              >×</button>
+            </div>
+            
+            <div style={{ padding: "1.5rem", overflowY: "auto", flex: 1 }}>
+              {isFetchingSpecs ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "3rem 0", color: "var(--text2)" }}>
+                  <div className="spinner" style={{ marginBottom: "1rem" }}></div>
+                  <div>Scraping live specifications...</div>
+                </div>
+              ) : competitorSpecsError ? (
+                <div style={{ color: "#ef4444", padding: "1rem", background: "rgba(239, 68, 68, 0.1)", borderRadius: "8px", border: "1px solid rgba(239, 68, 68, 0.2)" }}>
+                  ⚠️ {competitorSpecsError}
+                </div>
+              ) : competitorSpecs && Object.keys(competitorSpecs).length > 0 ? (
+                <div>
+                  <div style={{ marginBottom: "1rem", fontSize: "0.85rem", color: "var(--text2)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span style={{ display: "inline-block", width: "12px", height: "12px", borderRadius: "50%", background: "var(--amber)" }}></span>
+                    Only showing the Golden Filters used by this competitor
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    {Object.entries(competitorSpecs)
+                      .filter(([key]) => scrapedData?.filters?.some(f => f.isGolden && f.filterName.toLowerCase() === key.toLowerCase()))
+                      .map(([key, value]) => {
+                      const isGolden = true;
+                      return (
+                        <div key={key} style={{ 
+                          display: "grid", 
+                          gridTemplateColumns: "1fr 1fr", 
+                          gap: "1rem",
+                          padding: "0.75rem",
+                          background: isGolden ? "rgba(245, 158, 11, 0.1)" : "rgba(255,255,255,0.02)",
+                          border: isGolden ? "1px solid rgba(245, 158, 11, 0.3)" : "1px solid var(--border)",
+                          borderRadius: "6px"
+                        }}>
+                          <div style={{ fontSize: "0.85rem", color: isGolden ? "var(--amber)" : "var(--text2)", fontWeight: isGolden ? 600 : 400 }}>
+                            {key} {isGolden && "⭐"}
+                          </div>
+                          <div style={{ fontSize: "0.9rem", color: "var(--text1)", fontWeight: 500 }}>
+                            {value}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: "center", color: "var(--text3)", padding: "2rem" }}>
+                  No specifications found for this product.
+                </div>
+              )}
+            </div>
+            {selectedCompetitor.url && (
+              <div style={{ padding: "1rem 1.5rem", borderTop: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+                <a 
+                  href={selectedCompetitor.url} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  style={{ color: "var(--accent)", fontSize: "0.9rem", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "0.5rem" }}
+                >
+                  View on GeM ↗
+                </a>
+              </div>
             )}
           </div>
         </div>
