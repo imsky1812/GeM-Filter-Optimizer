@@ -113,6 +113,50 @@ def _extract_fragment_params(url: str) -> dict:
     return extra
 
 
+_COOKIE_LOCK = threading.Lock()
+_last_cookie_refresh_time = 0.0
+
+def _refresh_session_cookies_with_playwright(session: requests.Session) -> bool:
+    """Launch headless Playwright browser to establish valid session cookies on GeM."""
+    global _last_cookie_refresh_time
+    with _COOKIE_LOCK:
+        now = time.time()
+        if now - _last_cookie_refresh_time < 30:
+            logger.info("[Playwright] Cookies were refreshed recently, skipping redundant refresh.")
+            return True
+            
+        logger.info("[Playwright] Refreshing session cookies via headless Chromium...")
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent=_HEADERS["User-Agent"]
+                )
+                page = context.new_page()
+                page.goto("https://mkp.gem.gov.in/", timeout=30000)
+                
+                # Extract cookies
+                cookies = context.cookies()
+                browser.close()
+                
+            # Clear current cookies and inject the new ones
+            session.cookies.clear()
+            for cookie in cookies:
+                session.cookies.set(
+                    cookie["name"],
+                    cookie["value"],
+                    domain=cookie["domain"],
+                    path=cookie["path"]
+                )
+            _last_cookie_refresh_time = now
+            logger.info(f"[Playwright] Successfully loaded {len(cookies)} cookies into requests session.")
+            return True
+        except Exception as e:
+            logger.error(f"[Playwright] Failed to refresh cookies: {e}")
+            return False
+
+
 def _fetch_with_backoff(session: requests.Session, url: str) -> str:
     """
     Fetch a URL with exponential backoff.
@@ -130,18 +174,22 @@ def _fetch_with_backoff(session: requests.Session, url: str) -> str:
                 final = resp.url.strip("/")
                 if final == "https://mkp.gem.gov.in" or "login" in resp.url.lower():
                     if attempt < _MAX_FETCH_RETRIES - 1:
-                        # Re-init session cookies
-                        try:
-                            session.get("https://mkp.gem.gov.in/", timeout=15)
-                            time.sleep(0.5)
-                        except Exception:
-                            pass
+                        logger.warning(f"[Scraper] Redirect detected to {resp.url}, refreshing session cookies...")
+                        _refresh_session_cookies_with_playwright(session)
                         continue
 
             resp.raise_for_status()
             return resp.text
         except Exception as e:
             last_err = e
+            # If we hit a 403 Forbidden or 401 Unauthorized, refresh the session cookies immediately
+            is_auth_error = isinstance(e, requests.HTTPError) and e.response is not None and e.response.status_code in (401, 403)
+            if is_auth_error and attempt < _MAX_FETCH_RETRIES - 1:
+                logger.warning(f"[Scraper] HTTP {e.response.status_code} detected, refreshing session cookies via Playwright...")
+                _refresh_session_cookies_with_playwright(session)
+                time.sleep(2)
+                continue
+
             if attempt < _MAX_FETCH_RETRIES - 1:
                 backoff = min(_BACKOFF_BASE * (2 ** attempt), _BACKOFF_MAX)
                 time.sleep(backoff)
@@ -175,12 +223,8 @@ def _create_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
-    # Establish initial cookies (JSESSIONID etc.)
-    try:
-        session.get("https://mkp.gem.gov.in/", timeout=15)
-        time.sleep(0.5)
-    except Exception:
-        pass
+    # Establish initial cookies (JSESSIONID etc.) via Playwright
+    _refresh_session_cookies_with_playwright(session)
 
     return session
 
@@ -232,7 +276,7 @@ class GeMCategoryScraper:
         # Failure Mode 3: always enforce price ascending sort
         # GeM uses different sort param names; we try the most common one.
         # If it doesn't work, products will still be sorted client-side.
-        params["sort_by"] = "price_asc"
+        params["sort_type"] = "price_in_asc"
 
         # Merge fragment params (from URLs like search#/?q=chair)
         for k, v in self._fragment_params.items():
@@ -252,7 +296,7 @@ class GeMCategoryScraper:
         text = _fetch_with_backoff(self._session, url).strip()
 
         if not text.startswith("{"):
-            raise ValueError(f"Non-JSON response from page {page} (got HTML/empty)")
+            raise ValueError(f"Non-JSON response from page {page} (got HTML/empty)", text)
 
         return json.loads(text)
 
@@ -406,7 +450,19 @@ class GeMCategoryScraper:
         Returns (deduplicated_products, updated_stats).
         """
         # ── Page 1 ───────────────────────────────────────────────────────────
-        data1 = self._fetch_page(1)
+        try:
+            data1 = self._fetch_page(1)
+            is_html = False
+        except ValueError as e:
+            if len(e.args) >= 2 and isinstance(e.args[1], str):
+                html_text = e.args[1]
+                is_html = True
+            else:
+                raise
+
+        if is_html:
+            return self._scrape_html_fallback(html_text, stats)
+
         stats["pages_fetched"] += 1
 
         total_count = data1.get("number_of_results", 0)
@@ -532,6 +588,190 @@ class GeMCategoryScraper:
         stats["duplicates_removed"] = len(all_raw) - len(products)
 
         return products, stats
+
+    def _scrape_html_fallback(self, html_text: str, stats: dict) -> tuple:
+        from bs4 import BeautifulSoup
+        import re
+        soup = BeautifulSoup(html_text, "html.parser")
+        
+        products = []
+        cards = soup.select(
+            "#search-result-items li, "
+            ".product-wrapper, "
+            ".catalog-item, "
+            ".product-card, "
+            ".product-item, "
+            ".product_card, "
+            ".product-tuple, "
+            ".product-grid-item"
+        )
+        
+        if not cards:
+            links = soup.find_all("a", href=re.compile(r'/p-\d+-\d+-cat\.html'))
+            seen_parents = set()
+            for a in links:
+                p = a.parent
+                for _ in range(4):
+                    if p and p.name in ('div', 'li') and (p.get('class') or p.name == 'li'):
+                        if p not in seen_parents:
+                            seen_parents.add(p)
+                            cards.append(p)
+                        break
+                    p = p.parent if p else None
+
+        for card in cards:
+            try:
+                link_el = card.select_one('a[href*="/p-"]')
+                if not link_el:
+                    link_el = card.find('a', href=re.compile(r'/p-\d+-\d+-cat\.html'))
+                if not link_el:
+                    continue
+                
+                href = link_el.get("href", "")
+                product_url = href if href.startswith("http") else f"https://mkp.gem.gov.in{href}"
+                
+                m = re.search(r'/p-(\d+)-(\d+)-cat\.html', product_url)
+                if m:
+                    catalog_id = m.group(1)
+                    variant_id = f"{catalog_id}-{m.group(2)}"
+                else:
+                    continue
+
+                name_el = card.select_one('.product-title, .title, .product-name, h5, h4, [class*="title"]')
+                if not name_el:
+                    name_el = link_el
+                name = name_el.get_text(strip=True) if name_el else ""
+                name = re.sub(r'([A-Z\s]+)\1', r'\1', name).strip()
+                
+                price = 0
+                price_el = card.select_one('.final-price, .price, .offer_price, .our_price, [class*="price"]')
+                if price_el:
+                    price = self._parse_price_text(price_el.get_text(strip=True)) or 0
+
+                if price <= 0:
+                    continue
+
+                brand_el = card.select_one('.brand, .brand-name, [class*="brand"]')
+                brand = brand_el.get_text(strip=True) if brand_el else ""
+                
+                seller_el = card.select_one('.seller-name, .seller, .sold-by')
+                if not seller_el:
+                    seller_el = card.select_one('[class*="seller-name"], [class*="sold-by"]')
+                seller = seller_el.get_text(strip=True) if seller_el else ""
+                
+                # Specs
+                golden_params = {}
+                for li in card.select('ul.specs-list li, .specs li, .specifications li, .attributes li'):
+                    text = li.get_text(strip=True)
+                    if ":" in text:
+                        k, v = text.split(":", 1)
+                        golden_params[k.strip()] = v.strip()
+
+                products.append({
+                    "catalogue_id": variant_id,
+                    "price": price,
+                    "name": name,
+                    "brand": brand,
+                    "seller_id": "",
+                    "seller_name": seller,
+                    "oem_id": "",
+                    "product_url": product_url,
+                    "golden_params": golden_params,
+                })
+            except Exception as e:
+                logger.warning(f"[HTML Fallback] Error parsing card: {e}")
+                continue
+
+        # Extract facets
+        raw_facets = {"product specifications": {"facet_list": []}, "administrative": {"facet_list": []}}
+        sidebar = soup.select_one('#facets, #filters, .facets-container, .sidebar, #search-facets, .filter-sidebar')
+        if sidebar:
+            facet_blocks = sidebar.select('.facet, .filter-section, .facet-list, [class*="filter-group"]')
+            for block in facet_blocks:
+                title_el = block.select_one('h5, h6, .facet-title, [class*="title"]')
+                if not title_el:
+                    continue
+                filter_name = title_el.get_text(strip=True).replace(":", "").strip()
+                if not filter_name or len(filter_name) > 80:
+                    continue
+                
+                filter_key = block.get('id') or block.get('data-facet') or self._to_key(filter_name)
+                
+                # Extract options
+                vals = []
+                val_elements = block.select('label, .facet-values li, [class*="option"], [class*="value"]')
+                leaf_elements = []
+                for el in val_elements:
+                    is_parent = False
+                    for other in val_elements:
+                        if other is not el and other in el.descendants:
+                            is_parent = True
+                            break
+                    if not is_parent:
+                        leaf_elements.append(el)
+                        
+                for val_el in leaf_elements:
+                    val_text = val_el.get_text(strip=True)
+                    val_text = re.sub(r'\s*\(\d+\)\s*$', '', val_text).strip()
+                    if val_text and val_text.lower() not in ("true", "false", "null", "all", ""):
+                        if val_text not in vals:
+                            vals.append(val_text)
+                
+                if not vals:
+                    continue
+                
+                is_golden = 'golden' in block.get('class', []) or 'golden' in title_el.get('class', [])
+                if not is_golden:
+                    name_lower = filter_name.lower()
+                    is_golden = any(k in name_lower for k in ("make in india", "mse", "startup", "pac"))
+                
+                # Map back to facet structure
+                facet_entry = {
+                    "name": filter_name,
+                    "code": filter_key,
+                    "css_class": "golden" if is_golden else "",
+                    "type": "spec",
+                    "facet_values": [{"name": v, "value": v} for v in vals]
+                }
+                if is_golden:
+                    raw_facets["product specifications"]["facet_list"].append(facet_entry)
+                else:
+                    raw_facets["administrative"]["facet_list"].append(facet_entry)
+
+        # Fallback dummy golden parameters from specs
+        if not raw_facets["product specifications"]["facet_list"] and products:
+            filter_values = {}
+            for p in products:
+                for k, v in p.get("golden_params", {}).items():
+                    filter_values.setdefault(k, set()).add(v)
+            for fname, vals in filter_values.items():
+                raw_facets["product specifications"]["facet_list"].append({
+                    "name": fname,
+                    "code": self._to_key(fname),
+                    "css_class": "golden",
+                    "type": "spec",
+                    "facet_values": [{"name": v, "value": v} for v in sorted(list(vals))]
+                })
+
+        stats["_raw_facets"] = raw_facets
+        stats["total_count"] = len(products)
+        stats["duplicates_removed"] = 0
+        
+        return self._deduplicate(products), stats
+
+    def _parse_price_text(self, text: str) -> int | None:
+        cleaned = re.sub(r'[₹,\s]', '', text)
+        cleaned = re.sub(r'(?i)INR|Rs\.?', '', cleaned)
+        m = re.search(r'(\d+(?:\.\d+)?)', cleaned)
+        if m:
+            val = float(m.group(1))
+            if 10 <= val <= 10_000_000:
+                return int(val)
+        return None
+
+    def _to_key(self, name: str) -> str:
+        key = re.sub(r'[^a-z0-9\s]', '', name.lower().strip())
+        return re.sub(r'\s+', '_', key).strip('_')[:40]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

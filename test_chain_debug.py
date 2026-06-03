@@ -1,59 +1,71 @@
-"""Test the rewritten chain hunt algorithm with DEBUG logging."""
-import sys, time, json, os
-os.environ["PYTHONIOENCODING"] = "utf-8"
-import logging
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(message)s")
-# Suppress noisy urllib3
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+"""Test uppercase variations."""
+import sys, json, os
 
 sys.path.insert(0, "backend")
 from scraper import GeMScraper
 
 scraper = GeMScraper()
-url = "https://mkp.gem.gov.in/furniture-and-furnishings-accommodation-furniture-furniture-revolving-chair-v5-/search#/?q=REVOLVING%20CHAIR"
-target = 12000
+url = "https://mkp.gem.gov.in/furniture-and-furnishings-accommodation-furniture-furniture-revolving-chair-v5-/search"
 
-# Quick scrape for golden filters
-data = scraper.scrape(url)
-golden = [f for f in data["filters"] if f.get("isGolden") and f.get("filterKey") != "mse_applicable"]
-print(f"Products: {data['productCount']}, Golden Filters: {len(golden)} (MSE excluded)")
+# Test different variations in UPPERCASE
+cases = [
+    # Seat upholstery material (C6065E)
+    ("C6065E", "MESH"),
+    ("C6065E", "FABRICS"),
+    ("C6065E", "POLYESTER"),
+    ("C6065E", "FABRIC"),
+    ("C6065E", "MESH FABRICS"),
+    ("C6065E", "POLYESTER FABRIC"),
+    
+    # Backrest Height (C4978E)
+    ("C4978E", "MID"),
+    ("C4978E", "LOW"),
+    ("C4978E", "BACK"),
+    ("C4978E", "MID-BACK"),
+    ("C4978E", "LOW-BACK"),
+    
+    # Type of Chair (C2168E)
+    ("C2168E", "REVOLVING"),
+    ("C2168E", "CHAIR"),
+    ("C2168E", "WHEELS"),
+    ("C2168E", "REVOLVING CHAIR OF ADJUSTABLE HEIGHT WITH WHEELS"),
+    
+    # Seat Height Mechanism (C4048E)
+    ("C4048E", "PNEUMATIC"),
+    ("C4048E", "HYDRAULIC"),
+    ("C4048E", "PNEUMATIC MECHANISM (GAS LIFT)"),
+    ("C4048E", "HYDRAULIC MECHANISM"),
+    
+    # Backrest Width (C3029E)
+    ("C3029E", "LOW"),
+    ("C3029E", "MEDIUM"),
+    ("C3029E", "HIGH"),
+]
 
-# Run the chain hunt
-print("\n" + "=" * 70)
-t0 = time.time()
-result = scraper.smart_l1_discovery(
-    category_url=url,
-    target_price=target,
-    golden_filters=golden,
-    location="",
-    excluded_filter_keys=["mse_applicable"],
-)
-elapsed = time.time() - t0
+print("=== TESTING UPPERCASE TOKENS ===")
+for key, val in cases:
+    params = {key: val, "format": "json"}
+    r = scraper._session.get(url, params=params)
+    try:
+        total = r.json().get("number_of_results", 0)
+        if total > 0:
+            print(f"SUCCESS: {key}={repr(val)} -> total={total}")
+        else:
+            print(f"  0 results: {key}={repr(val)}")
+    except Exception as e:
+        print(f"  {key}={repr(val)} -> failed: {e}")
+print("Done testing.")
 
-print(f"\nDone in {elapsed:.1f}s | API Calls: {result.get('totalApiCalls')}")
-print(f"Status: {result.get('status')} | Paths found: {result.get('totalPaths')}")
 
-for i, path in enumerate(result.get("winningPaths", [])[:5]):
-    steps = path.get("iterations", [])
-    print(f"\n--- Path {i+1} ({len(steps)} steps, chain={path.get('chainLength')}) ---")
-    for step in steps:
-        fa = step["filterApplied"]
-        prev = step.get("prevMinPrice", "?")
-        new = step.get("newMinPrice", "?")
-        new_str = f"Rs {new:,}" if isinstance(new, int) else str(new)
-        prev_str = f"Rs {prev:,}" if isinstance(prev, int) else str(prev)
-        print(f"  Step {step['iteration']}: {prev_str} -> {new_str} "
-              f"| {fa['filterName']} = {fa['value']} "
-              f"| products={step.get('newTotal','?')} sellers={step.get('sellerCount','?')}")
 
-    if path.get("isUntapped"):
-        print(f"  RESULT: UNTAPPED NICHE")
-    elif path.get("status") == "PARTIAL":
-        mp = path.get("nicheMinPrice")
-        print(f"  RESULT: STUCK/PARTIAL (Max price reached: Rs {mp:,}), products={path.get('totalProducts')}")
-    else:
-        mp = path.get("nicheMinPrice")
-        print(f"  RESULT: WIN - YOU ARE L1! Next cheapest: Rs {mp:,}, products={path.get('totalProducts')}")
-    print(f"  Filters: {path.get('activeFilters')}")
-    if "competitorInsights" in path:
-        print(f"  Insights: {path['competitorInsights']}")
+
+
+
+
+
+
+
+
+
+
+

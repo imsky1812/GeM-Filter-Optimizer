@@ -23,6 +23,7 @@ class GeMScraper:
     # are sent to GeM's network ANYWHERE in the entire backend application loop,
     # completely insulating our server from firing Firewall-banning spikes.
     _HTTP_SEMAPHORE = threading.BoundedSemaphore(8)
+    _COOKIE_LOCK = threading.Lock()
 
     HEADERS = {
         "User-Agent": (
@@ -107,14 +108,48 @@ class GeMScraper:
         
         self._initialize_session()
 
+    def _refresh_session_cookies_with_playwright(self):
+        """Launch headless Playwright browser to establish valid session cookies on GeM."""
+        with GeMScraper._COOKIE_LOCK:
+            now = time.time()
+            if hasattr(self, "_last_cookie_refresh_time") and now - self._last_cookie_refresh_time < 30:
+                logger.info("[Playwright] Cookies were refreshed recently, skipping redundant refresh.")
+                return True
+                
+            logger.info("[Playwright] Refreshing session cookies via headless Chromium...")
+            try:
+                from playwright.sync_api import sync_playwright
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    context = browser.new_context(
+                        user_agent=self.HEADERS["User-Agent"]
+                    )
+                    page = context.new_page()
+                    page.goto("https://mkp.gem.gov.in/", timeout=30000)
+                    
+                    # Extract cookies
+                    cookies = context.cookies()
+                    browser.close()
+                    
+                # Clear current cookies and inject the new ones
+                self._session.cookies.clear()
+                for cookie in cookies:
+                    self._session.cookies.set(
+                        cookie["name"],
+                        cookie["value"],
+                        domain=cookie["domain"],
+                        path=cookie["path"]
+                    )
+                self._last_cookie_refresh_time = now
+                logger.info(f"[Playwright] Successfully loaded {len(cookies)} cookies into requests session.")
+                return True
+            except Exception as e:
+                logger.error(f"[Playwright] Failed to refresh cookies: {e}")
+                return False
+
     def _initialize_session(self):
         """Establish initial session cookies to prevent GeM from redirecting to homepage."""
-        try:
-            # Emulate browser visiting the homepage first to get JSESSIONID and cookies
-            self._session.get("https://mkp.gem.gov.in/", timeout=15)
-            time.sleep(0.5)
-        except Exception:
-            pass
+        self._refresh_session_cookies_with_playwright()
 
     def __del__(self):
         try:
@@ -445,7 +480,7 @@ class GeMScraper:
 
         extra_qs = ""
         if extra_params:
-            filtered = {k: v for k, v in extra_params.items()
+            filtered = {k: self._normalize_filter_value(v) for k, v in extra_params.items()
                         if k.lower() not in ("page", "format")}
             if filtered:
                 extra_qs = "&" + urlencode(filtered)
@@ -628,7 +663,7 @@ class GeMScraper:
 
         extra_qs = ""
         if extra_params:
-            filtered = {k: v for k, v in extra_params.items()
+            filtered = {k: self._normalize_filter_value(v) for k, v in extra_params.items()
                         if k.lower() not in ("page", "format")}
             if filtered:
                 extra_qs = "&" + urlencode(filtered)
@@ -645,12 +680,12 @@ class GeMScraper:
                 page1_url = f"{base_url}?page=1&format=json"
                 text = self._fetch(page1_url).strip()
             if not text.startswith("{"):
-                return self._scrape_html_listing(url)
+                return self._scrape_html_listing(text, url)
 
         try:
             data1 = json.loads(text)
         except json.JSONDecodeError:
-            return self._scrape_html_listing(url)
+            return self._scrape_html_listing(text, url)
 
         total_results = data1.get("number_of_results", 0)
         facet_defs    = self._extract_facet_defs(data1.get("facets", {}))
@@ -793,7 +828,7 @@ class GeMScraper:
             name      = facet.get("name", "")
             code      = facet.get("code", "")
             css_class = facet.get("css_class", "")
-            if len(name) > 80:
+            if len(name) > 200:
                 continue
             defs.append({
                 "filterName":  name,
@@ -1000,7 +1035,7 @@ class GeMScraper:
 
     def _enrich_single_product(self, product: dict, name_to_code: dict) -> dict:
         """Fetch specs for a single product (used by thread pool)."""
-        url = product.get("productUrl")
+        url = product.get("productUrl") or product.get("product_url")
         if not url:
             return product
         if url in self._product_specs_cache:
@@ -1132,22 +1167,194 @@ class GeMScraper:
 
     # ── HTML FALLBACK ────────────────────────────────────────────────────────
 
-    def _scrape_html_listing(self, url: str) -> dict:
-        error_msg = "This category URL is invalid, empty, or doesn't support the JSON API. Please search on GeM and select a valid category."
-        
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        path = parsed.path.strip("/")
-        if path == "search":
-            error_msg = "You entered a Global Search URL. Please click on a specific Category on the left sidebar in GeM, then copy that URL."
+    def _scrape_html_listing(self, html_content: str, url: str) -> dict:
+        """
+        BeautifulSoup-based fallback parser for HTML listing pages when JSON API fails.
+        Extracts products and available filters directly from the HTML source.
+        """
+        logger.info(f"[HTML Fallback] Parsing HTML source from category URL: {url}")
+        soup = BeautifulSoup(html_content, "html.parser")
 
+        products = []
+        # 1. Product card selectors
+        cards = soup.select(
+            "#search-result-items li, "
+            ".product-wrapper, "
+            ".catalog-item, "
+            ".product-card, "
+            ".product-item, "
+            ".product_card, "
+            ".product-tuple, "
+            ".product-grid-item"
+        )
+        
+        # 1.1 Resilient link-based card recovery fallback
+        if not cards:
+            links = soup.find_all("a", href=re.compile(r'/p-\d+-\d+-cat\.html'))
+            seen_parents = set()
+            for a in links:
+                p = a.parent
+                for _ in range(4):  # climb up to 4 levels to find a suitable card container
+                    if p and p.name in ('div', 'li') and (p.get('class') or p.name == 'li'):
+                        if p not in seen_parents:
+                            seen_parents.add(p)
+                            cards.append(p)
+                        break
+                    p = p.parent if p else None
+
+        for card in cards:
+            try:
+                # Find the product detail link
+                link_el = card.select_one('a[href*="/p-"]')
+                if not link_el:
+                    link_el = card.find('a', href=re.compile(r'/p-\d+-\d+-cat\.html'))
+                if not link_el:
+                    continue
+                
+                href = link_el.get("href", "")
+                product_url = href if href.startswith("http") else f"https://mkp.gem.gov.in{href}"
+                
+                # Extract catalog ID & variant ID from URL
+                m = re.search(r'/p-(\d+)-(\d+)-cat\.html', product_url)
+                if m:
+                    catalog_id = m.group(1)
+                    variant_id = f"{catalog_id}-{m.group(2)}"
+                else:
+                    continue
+
+                # Title / Name
+                name_el = card.select_one('.product-title, .title, .product-name, h5, h4, [class*="title"]')
+                if not name_el:
+                    name_el = link_el
+                name = name_el.get_text(strip=True) if name_el else ""
+                name = re.sub(r'([A-Z\s]+)\1', r'\1', name).strip()  # Clean duplicate uppercase names if any
+                
+                # Price
+                price = 0
+                price_el = card.select_one('.final-price, .price, .offer_price, .our_price, [class*="price"]')
+                if price_el:
+                    price = self._parse_price(price_el.get_text(strip=True)) or 0
+
+                if price <= 0:
+                    continue
+
+                # Brand
+                brand_el = card.select_one('.brand, .brand-name, [class*="brand"]')
+                brand = brand_el.get_text(strip=True) if brand_el else ""
+                
+                # Seller & SellerType
+                seller_el = card.select_one('.seller-name, .seller, .sold-by')
+                if not seller_el:
+                    seller_el = card.select_one('[class*="seller-name"], [class*="sold-by"]')
+                seller = seller_el.get_text(strip=True) if seller_el else ""
+                
+                sold_as_el = card.select_one('[class*="sold_as"], [class*="seller-type"]')
+                seller_type = sold_as_el.get_text(strip=True) if sold_as_el else ""
+                
+                # Specs (try to parse inline bullets if present)
+                specs = {}
+                for li in card.select('ul.specs-list li, .specs li, .specifications li, .attributes li'):
+                    text = li.get_text(strip=True)
+                    if ":" in text:
+                        k, v = text.split(":", 1)
+                        specs[k.strip()] = v.strip()
+
+                products.append({
+                    "id": variant_id,
+                    "name": name[:150],
+                    "price": price,
+                    "brand": brand,
+                    "seller": seller,
+                    "sellerType": seller_type,
+                    "productUrl": product_url,
+                    "specs": specs,
+                })
+            except Exception as e:
+                logger.warning(f"[HTML Fallback] Error parsing card: {e}")
+                continue
+
+        # 2. Extract Filters/Facets
+        filters = []
+        
+        # Check standard container elements for sidebar facets
+        sidebar = soup.select_one('#facets, #filters, .facets-container, .sidebar, #search-facets, .filter-sidebar')
+        if sidebar:
+            # Look for each facet block/section
+            facet_blocks = sidebar.select('.facet, .filter-section, .facet-list, [class*="filter-group"]')
+            for block in facet_blocks:
+                # Name of the filter
+                title_el = block.select_one('h5, h6, .facet-title, [class*="title"]')
+                if not title_el:
+                    continue
+                filter_name = title_el.get_text(strip=True).replace(":", "").strip()
+                if not filter_name or len(filter_name) > 80:
+                    continue
+                
+                # Try to find a code/key (or generate one from the title)
+                filter_key = block.get('id') or block.get('data-facet') or self._to_key(filter_name)
+                
+                # Extract options/values (prevent selecting parent containers containing children)
+                vals = []
+                val_elements = block.select('label, .facet-values li, [class*="option"], [class*="value"]')
+                leaf_elements = []
+                for el in val_elements:
+                    is_parent = False
+                    for other in val_elements:
+                        if other is not el and other in el.descendants:
+                            is_parent = True
+                            break
+                    if not is_parent:
+                        leaf_elements.append(el)
+                        
+                for val_el in leaf_elements:
+                    val_text = val_el.get_text(strip=True)
+                    val_text = re.sub(r'\s*\(\d+\)\s*$', '', val_text).strip()
+                    if val_text and val_text.lower() not in ("true", "false", "null", "all", ""):
+                        if val_text not in vals:
+                            vals.append(val_text)
+                
+                if not vals:
+                    continue
+                
+                # Identify if golden
+                is_golden = 'golden' in block.get('class', []) or 'golden' in title_el.get('class', [])
+                if not is_golden:
+                    name_lower = filter_name.lower()
+                    is_golden = any(k in name_lower for k in ("make in india", "mse", "startup", "pac"))
+                
+                filters.append({
+                    "filterName": filter_name,
+                    "filterKey": filter_key,
+                    "values": vals[:20],
+                    "isGolden": is_golden,
+                    "type": "spec" if not is_golden else "golden",
+                })
+        
+        # 3. Fallback: If no filters parsed from sidebar, build dummy golden filters from products' specs
+        if not filters and products:
+            filter_values = {}
+            for p in products:
+                for k, v in p.get("specs", {}).items():
+                    filter_values.setdefault(k, set()).add(v)
+            for fname, vals in filter_values.items():
+                filters.append({
+                    "filterName": fname,
+                    "filterKey": self._to_key(fname),
+                    "values": sorted(list(vals))[:20],
+                    "isGolden": True,
+                    "type": "spec",
+                })
+
+        logger.info(f"[HTML Fallback] Successfully parsed {len(products)} products and {len(filters)} filters.")
+        
         return {
-            "filters": [],
-            "products": [],
+            "filters": filters,
+            "products": products,
             "url": url,
-            "productCount": 0,
-            "filterCount": 0,
-            "error": error_msg,
+            "productCount": len(products),
+            "filterCount": len(filters),
+            "totalResults": len(products),
+            "location": "All India",
         }
 
     # ── HTTP ────────────────────────────────────────────────────────────────
@@ -1164,12 +1371,21 @@ class GeMScraper:
                 # Check if GeM redirected us to the homepage or login page due to missing session
                 if "mkp.gem.gov.in" in resp.url and (resp.url.strip("/") == "https://mkp.gem.gov.in" or "login" in resp.url.lower()):
                     if attempt < retries - 1:
+                        logger.warning(f"[Scraper] Redirect detected to {resp.url}, refreshing session cookies...")
                         self._initialize_session()
                         continue
                         
                 return resp.text
             except requests.RequestException as e:
                 last_err = e
+                # If we hit a 403 Forbidden or 401 Unauthorized, refresh the session cookies immediately
+                is_auth_error = isinstance(e, requests.HTTPError) and e.response is not None and e.response.status_code in (401, 403)
+                if is_auth_error and attempt < retries - 1:
+                    logger.warning(f"[Scraper] HTTP {e.response.status_code} detected, refreshing session cookies via Playwright...")
+                    self._initialize_session()
+                    time.sleep(2)
+                    continue
+                
                 if attempt < retries - 1:
                     time.sleep(1 * (attempt + 1))
         raise RuntimeError(f"Failed to fetch page after {retries} attempts: {last_err}")
@@ -1199,3 +1415,17 @@ class GeMScraper:
     def _to_key(self, name: str) -> str:
         key = re.sub(r'[^a-z0-9\s]', '', name.lower().strip())
         return re.sub(r'\s+', '_', key).strip('_')[:40]
+
+    def _normalize_filter_value(self, val) -> str:
+        """
+        Normalize a spec filter value for the GeM search JSON API index.
+        E.g. "Mesh fabrics" -> "Meshfabrics", "Brown / Tan" -> "Brown", "1000 : 1" -> "10001".
+        """
+        if not isinstance(val, str):
+            return str(val)
+        if "/" in val:
+            val = val.split("/")[0]
+        # Strip both spaces and colons to match GeM's index representation
+        val = val.replace(" ", "").replace(":", "")
+        return val
+
