@@ -200,6 +200,92 @@ body {
   font-weight: 600;
 }
 
+/* ── Step Indicator ─────────────────────────────────────────────────────────── */
+.step-indicator {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--space-10);
+}
+
+.step-indicator-item {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.step-indicator-item:last-child {
+  flex: 0;
+}
+
+.step-indicator-node {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--surface-base);
+  color: var(--ink-subtle);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: not-allowed;
+  transition: all var(--duration-md) var(--ease-out);
+}
+
+.step-indicator-node[data-state="current"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.step-indicator-node[data-state="done"] {
+  background: var(--success-glow);
+  border-color: var(--success);
+  color: var(--success);
+  cursor: pointer;
+}
+
+.step-indicator-node[data-state="done"]:hover {
+  background: var(--success);
+  color: #fff;
+}
+
+.step-indicator-label {
+  margin-left: var(--space-2);
+  margin-right: var(--space-3);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-subtle);
+  white-space: nowrap;
+}
+
+.step-indicator-label[data-state="current"] {
+  color: var(--ink);
+}
+
+.step-indicator-label[data-state="done"] {
+  color: var(--success);
+}
+
+.step-indicator-line {
+  flex: 1;
+  height: 1px;
+  background: var(--glass-border);
+  margin-right: var(--space-3);
+}
+
+.step-indicator-line[data-state="done"] {
+  background: var(--success);
+}
+
+@media (max-width: 640px) {
+  .step-indicator-label {
+    display: none;
+  }
+}
+
 /* ── Glass Cards ────────────────────────────────────────────────────────────── */
 .card {
   background: var(--surface-base);

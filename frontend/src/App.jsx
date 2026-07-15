@@ -8,6 +8,7 @@ import PriceInput from "./components/PriceInput.jsx";
 import SurgicalStrike from "./components/SurgicalStrike.jsx";
 import ChainHuntResults from "./components/ChainHuntResults.jsx";
 import CompetitorSpecsModal from "./components/CompetitorSpecsModal.jsx";
+import StepIndicator from "./components/StepIndicator.jsx";
 
 const BACKEND_URL = "/api";
 
@@ -25,6 +26,15 @@ export default function App() {
   const [chainResults, setChainResults] = useState(null);
   const [chainError, setChainError] = useState("");
   const [chainPathIdx, setChainPathIdx] = useState(0);
+
+  // Wizard step state
+  const [currentStep, setCurrentStep] = useState(1);
+  const [furthestStep, setFurthestStep] = useState(1);
+
+  const goToStep = (step) => {
+    setCurrentStep(step);
+    setFurthestStep((f) => Math.max(f, step));
+  };
 
   // Surgical Strike state
   const [strikeUrl, setStrikeUrl] = useState("");
@@ -97,6 +107,7 @@ export default function App() {
     setChainResults(null);
     setStrikeStatus("idle");
     setStrikeResults(null);
+    setFurthestStep(1);
 
     // Auto-prepend https:// if user didn't include a protocol
     let normalizedUrl = gemUrl.trim();
@@ -122,6 +133,7 @@ export default function App() {
       const parsed = await res.json();
       setScrapedData(parsed);
       setScrapeStatus("done");
+      goToStep(2);
     } catch (e) {
       setScrapeError(e.message || "Failed to scrape");
       setScrapeStatus("error");
@@ -224,19 +236,27 @@ export default function App() {
     <div className="app">
       <Header />
 
-      <UrlInput
-        gemUrl={gemUrl}
-        setGemUrl={setGemUrl}
-        selectedLocation={selectedLocation}
-        setSelectedLocation={setSelectedLocation}
-        locations={locations}
-        scrapeStatus={scrapeStatus}
-        onScrape={handleScrape}
-        scrapeError={scrapeError}
-        scrapedData={scrapedData}
+      <StepIndicator
+        currentStep={currentStep}
+        furthestStep={furthestStep}
+        onStepClick={setCurrentStep}
       />
 
-      {scrapedData && (
+      {currentStep === 1 && (
+        <UrlInput
+          gemUrl={gemUrl}
+          setGemUrl={setGemUrl}
+          selectedLocation={selectedLocation}
+          setSelectedLocation={setSelectedLocation}
+          locations={locations}
+          scrapeStatus={scrapeStatus}
+          onScrape={handleScrape}
+          scrapeError={scrapeError}
+          scrapedData={scrapedData}
+        />
+      )}
+
+      {currentStep === 2 && scrapedData && (
         <PriceInput
           sellerPrice={sellerPrice}
           setSellerPrice={setSellerPrice}
