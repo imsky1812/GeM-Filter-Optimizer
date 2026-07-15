@@ -691,7 +691,7 @@ input:focus {
   background: var(--success);
   color: #0a0b0f;
   border: none;
-  box-shadow: 0 0 16px var(--success-glow);
+  box-shadow: var(--shadow-sm);
 }
 
 .chain-node-untapped {
@@ -1162,7 +1162,7 @@ input:focus {
 
 .strike-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 16px var(--danger-glow);
+  box-shadow: var(--shadow-md);
 }
 
 .strike-btn:disabled {
