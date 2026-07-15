@@ -2190,5 +2190,61 @@ input:focus {
   margin-bottom: var(--space-4);
 }
 
+/* ── Result Headline (simplified default view) ─────────────────────────────── */
+.chain-headline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.chain-headline-icon {
+  font-size: 1.125rem;
+  flex-shrink: 0;
+}
+
+.chain-headline-success {
+  background: var(--success-glow);
+  color: var(--success);
+}
+
+.chain-headline-amber {
+  background: var(--amber-glow);
+  color: var(--amber);
+}
+
+.chain-headline-danger {
+  background: var(--danger-glow);
+  color: var(--danger);
+}
+
+.chain-detail-toggle {
+  margin-top: var(--space-4);
+}
+
+.chain-detail-summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.chain-detail-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chain-detail-summary::after {
+  content: ' →';
+}
+
+.chain-detail-toggle[open] .chain-detail-summary::after {
+  content: ' ↓';
+}
+
 
 
