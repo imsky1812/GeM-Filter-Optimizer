@@ -156,6 +156,18 @@ export default function ChainHuntResults({
                               </div>
                             </div>
                           </div>
+
+                          {chainResults.bestAchievablePrice && (
+                            <div className="stuck-advice">
+                              <span>💡</span>
+                              <span>
+                                To become L1 in this category, you would need to list your product
+                                below <strong className="color-amber">
+                                  ₹{chainResults.bestAchievablePrice.toLocaleString()}
+                                </strong> (the highest price floor achievable through spec filters).
+                              </span>
+                            </div>
+                          )}
                         </div>
                       )}
 
