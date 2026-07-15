@@ -4,8 +4,7 @@ export default function PriceInput({
   scrapedData,
   minCatPrice,
   priceNum,
-  chainStatus,
-  onChainHunt,
+  onContinue,
   mandatoryFilters,
   setMandatoryFilters,
   isFilterDropdownOpen,
@@ -16,11 +15,10 @@ export default function PriceInput({
   return (
     <div className="card fade-in fade-in-d1 relative-z-50">
       <div className="card-hdr">
-        <div className="step-num">02</div>
         <div>
           <div className="card-title">Your Product Price</div>
           <div className="card-desc">
-            Enter your selling price and launch Smart L1 Hunt to find golden filter paths
+            Enter your price, then continue to choose an analysis.
           </div>
         </div>
       </div>
@@ -37,28 +35,18 @@ export default function PriceInput({
         </div>
         {priceNum > 0 && (
           <div className="flex-gap-12-ml-auto">
-            <button
-              className="chain-hunt-trigger"
-              onClick={onChainHunt}
-              disabled={chainStatus === "loading"}
-            >
-              {chainStatus === "loading" ? (
-                <>
-                  <span className="spin" /> Hunting...
-                </>
-              ) : (
-                "⚡ Smart L1 Hunt"
-              )}
+            <button className="chain-hunt-trigger" onClick={onContinue}>
+              Find my L1 path →
             </button>
           </div>
         )}
       </div>
       
       {/* Mandatory Filters Section */}
-      <div className="mandatory-filters-section mandatory-section">
-        <div className="mandatory-title">
-          Mandatory Spec Requirements (Optional)
-        </div>
+      <details className="mandatory-filters-section mandatory-section">
+        <summary className="mandatory-title">
+          Advanced: required specs
+        </summary>
         <div className="mandatory-desc">
           Select any specific features the buyer absolutely requires. The deep search will start from these filters and find the remaining golden filters needed for L1.
         </div>
@@ -157,7 +145,7 @@ export default function PriceInput({
             </div>
           )}
         </div>
-      </div>
+      </details>
     </div>
   );
 }

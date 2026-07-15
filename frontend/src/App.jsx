@@ -263,8 +263,7 @@ export default function App() {
           scrapedData={scrapedData}
           minCatPrice={minCatPrice}
           priceNum={priceNum}
-          chainStatus={chainStatus}
-          onChainHunt={handleChainHunt}
+          onContinue={() => goToStep(3)}
           mandatoryFilters={mandatoryFilters}
           setMandatoryFilters={setMandatoryFilters}
           isFilterDropdownOpen={isFilterDropdownOpen}

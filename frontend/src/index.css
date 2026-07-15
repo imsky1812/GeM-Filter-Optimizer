@@ -1444,6 +1444,29 @@ input:focus {
   line-height: 1.5;
 }
 
+.mandatory-filters-section > summary.mandatory-title {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+}
+
+.mandatory-filters-section > summary.mandatory-title::-webkit-details-marker {
+  display: none;
+}
+
+.mandatory-filters-section > summary.mandatory-title::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: var(--space-2);
+  color: var(--ink-subtle);
+  transition: transform var(--duration-sm) var(--ease-out);
+}
+
+.mandatory-filters-section[open] > summary.mandatory-title::before {
+  transform: rotate(90deg);
+}
+
 .chips-container {
   display: flex;
   flex-wrap: wrap;
