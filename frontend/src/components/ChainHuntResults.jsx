@@ -1,6 +1,5 @@
 export default function ChainHuntResults({
   chainStatus,
-  setChainStatus,
   chainResults,
   chainError,
   onChainHunt,
@@ -37,25 +36,14 @@ export default function ChainHuntResults({
               <button className="btn btn-primary flex-1" onClick={onChainHunt}>
                 Retry
               </button>
-              <button className="btn flex-1" onClick={() => setChainStatus("idle")}>
-                ← Back
-              </button>
             </div>
           </div>
         )}
 
         {chainStatus === "done" && chainResults && (
           <>
-            <div className="flex-space-between-align-center margin-bottom-16">
-              <button
-                onClick={() => setChainStatus("idle")}
-                className="btn-back"
-              >
-                <span>←</span> Back
-              </button>
-              <div className="text-xs-subtle">
-                ⚡ Sequential Chain Elimination
-              </div>
+            <div className="text-xs-subtle margin-bottom-16">
+              ⚡ Sequential Chain Elimination
             </div>
 
             {/* Summary stats */}

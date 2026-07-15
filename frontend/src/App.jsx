@@ -9,6 +9,7 @@ import SurgicalStrike from "./components/SurgicalStrike.jsx";
 import ChainHuntResults from "./components/ChainHuntResults.jsx";
 import CompetitorSpecsModal from "./components/CompetitorSpecsModal.jsx";
 import StepIndicator from "./components/StepIndicator.jsx";
+import ToolChoice from "./components/ToolChoice.jsx";
 
 const BACKEND_URL = "/api";
 
@@ -30,10 +31,31 @@ export default function App() {
   // Wizard step state
   const [currentStep, setCurrentStep] = useState(1);
   const [furthestStep, setFurthestStep] = useState(1);
+  const [activeTool, setActiveTool] = useState(null); // null | "chainHunt" | "strike"
 
   const goToStep = (step) => {
     setCurrentStep(step);
     setFurthestStep((f) => Math.max(f, step));
+  };
+
+  const handleStartOver = () => {
+    setGemUrl("");
+    setSellerPrice("");
+    setScrapedData(null);
+    setScrapeStatus("idle");
+    setScrapeError("");
+    setChainStatus("idle");
+    setChainResults(null);
+    setChainError("");
+    setChainPathIdx(0);
+    setStrikeUrl("");
+    setStrikeStatus("idle");
+    setStrikeResults(null);
+    setStrikeError("");
+    setMandatoryFilters([]);
+    setActiveTool(null);
+    setCurrentStep(1);
+    setFurthestStep(1);
   };
 
   // Surgical Strike state
@@ -142,6 +164,8 @@ export default function App() {
 
   const handleSurgicalStrike = async () => {
     if (!strikeUrl.trim() || !gemUrl.trim() || !priceNum) return;
+    setActiveTool("strike");
+    goToStep(4);
     setStrikeStatus("loading");
     setStrikeResults(null);
     setStrikeError("");
@@ -185,6 +209,8 @@ export default function App() {
 
   const handleChainHunt = async () => {
     if (!gemUrl.trim() || !priceNum) return;
+    setActiveTool("chainHunt");
+    goToStep(4);
     setChainStatus("loading");
     setChainResults(null);
     setChainError("");
@@ -273,8 +299,10 @@ export default function App() {
         />
       )}
 
-      {scrapedData && priceNum > 0 && (
-        <SurgicalStrike
+      {currentStep === 3 && scrapedData && priceNum > 0 && (
+        <ToolChoice
+          onChooseChainHunt={handleChainHunt}
+          chainStatus={chainStatus}
           strikeUrl={strikeUrl}
           setStrikeUrl={setStrikeUrl}
           strikeStatus={strikeStatus}
@@ -286,19 +314,44 @@ export default function App() {
         />
       )}
 
-      {chainStatus !== "idle" && (
-        <ChainHuntResults
-          chainStatus={chainStatus}
-          setChainStatus={setChainStatus}
-          chainResults={chainResults}
-          chainError={chainError}
-          onChainHunt={handleChainHunt}
-          priceNum={priceNum}
-          chainPathIdx={chainPathIdx}
-          setChainPathIdx={setChainPathIdx}
-          scrapedData={scrapedData}
-          onFetchCompetitorSpecs={handleFetchCompetitorSpecs}
-        />
+      {currentStep === 4 && (
+        <>
+          <div className="step4-toolbar">
+            <button className="btn-back" onClick={() => setCurrentStep(3)}>
+              <span>←</span> Back
+            </button>
+            <button className="btn" onClick={handleStartOver}>
+              Start over
+            </button>
+          </div>
+
+          {activeTool === "chainHunt" && (
+            <ChainHuntResults
+              chainStatus={chainStatus}
+              chainResults={chainResults}
+              chainError={chainError}
+              onChainHunt={handleChainHunt}
+              priceNum={priceNum}
+              chainPathIdx={chainPathIdx}
+              setChainPathIdx={setChainPathIdx}
+              scrapedData={scrapedData}
+              onFetchCompetitorSpecs={handleFetchCompetitorSpecs}
+            />
+          )}
+
+          {activeTool === "strike" && (
+            <SurgicalStrike
+              strikeUrl={strikeUrl}
+              setStrikeUrl={setStrikeUrl}
+              strikeStatus={strikeStatus}
+              setStrikeStatus={setStrikeStatus}
+              strikeResults={strikeResults}
+              strikeError={strikeError}
+              onSurgicalStrike={handleSurgicalStrike}
+              priceNum={priceNum}
+            />
+          )}
+        </>
       )}
 
       <CompetitorSpecsModal
