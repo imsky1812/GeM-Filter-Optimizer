@@ -4,3 +4,4 @@ beautifulsoup4
 pydantic
 requests
 lxml
+playwright

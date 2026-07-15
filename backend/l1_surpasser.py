@@ -159,42 +159,16 @@ def _refresh_session_cookies_with_playwright(session: requests.Session) -> bool:
 
 def _fetch_with_backoff(session: requests.Session, url: str) -> str:
     """
-    Fetch a URL with exponential backoff.
-    Base 1s, max 32s, max 5 retries.
-    Raises RuntimeError after all retries exhausted.
+    Fetch a URL using the persistent Playwright browser to bypass GeM's WAF.
+
+    Playwright's sync API can only be driven from the thread that created
+    it, so this delegates to BrowserManager.fetch(), which runs the actual
+    browser I/O on its own dedicated background thread (async Playwright
+    under the hood) and blocks this calling thread for the result. Safe to
+    call from any thread.
     """
-    last_err = None
-    for attempt in range(_MAX_FETCH_RETRIES):
-        try:
-            with _HTTP_SEMAPHORE:
-                resp = session.get(url, timeout=20, allow_redirects=True)
-
-            # Detect GeM session redirect (homepage/login)
-            if "mkp.gem.gov.in" in resp.url:
-                final = resp.url.strip("/")
-                if final == "https://mkp.gem.gov.in" or "login" in resp.url.lower():
-                    if attempt < _MAX_FETCH_RETRIES - 1:
-                        logger.warning(f"[Scraper] Redirect detected to {resp.url}, refreshing session cookies...")
-                        _refresh_session_cookies_with_playwright(session)
-                        continue
-
-            resp.raise_for_status()
-            return resp.text
-        except Exception as e:
-            last_err = e
-            # If we hit a 403 Forbidden or 401 Unauthorized, refresh the session cookies immediately
-            is_auth_error = isinstance(e, requests.HTTPError) and e.response is not None and e.response.status_code in (401, 403)
-            if is_auth_error and attempt < _MAX_FETCH_RETRIES - 1:
-                logger.warning(f"[Scraper] HTTP {e.response.status_code} detected, refreshing session cookies via Playwright...")
-                _refresh_session_cookies_with_playwright(session)
-                time.sleep(2)
-                continue
-
-            if attempt < _MAX_FETCH_RETRIES - 1:
-                backoff = min(_BACKOFF_BASE * (2 ** attempt), _BACKOFF_MAX)
-                time.sleep(backoff)
-
-    raise RuntimeError(f"Failed after {_MAX_FETCH_RETRIES} attempts: {last_err}")
+    from crawler import BrowserManager
+    return BrowserManager.get_instance().fetch(url, timeout=30000, retries=_MAX_FETCH_RETRIES)
 
 
 def _names_match(name1: str, name2: str) -> bool:

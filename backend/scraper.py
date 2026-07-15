@@ -522,34 +522,32 @@ class GeMScraper:
                 "product_count": len(all_prices),
             }
 
-        # Step 2: remaining pages in parallel with up to 3 retries per page
-        def fetch_page(page: int) -> list:
-            for attempt in range(5):
-                try:
-                    purl = f"{base_url}?page={page}&format=json{extra_qs}"
-                    t = self._fetch(purl, retries=2).strip()
-                    if not t.startswith("{"):
-                        # Trigger retry if GeM sent HTML redirects or captcha
-                        raise ValueError("Response is not JSON")
-                    d = json.loads(t)
-                    return [int(c.get("final_price", {}).get("value", 0))
-                            for c in d.get("catalogs", [])
-                            if int(c.get("final_price", {}).get("value", 0)) > 0]
-                except Exception:
-                    if attempt < 4:
-                        time.sleep(2 * (attempt + 1))
-            return []
-
+        # Step 2: remaining pages, genuinely concurrent (batched so we can
+        # still early-exit as soon as a cheaper competitor turns up, instead
+        # of fetching all — possibly hundreds of — pages up front)
         pages_left = list(range(2, total_pages + 1))
-        # Lower workers to 8 for stability against GeM WAF
-        with ThreadPoolExecutor(max_workers=min(8, len(pages_left))) as ex:
-            futures = [ex.submit(fetch_page, pg) for pg in pages_left]
-            for f in as_completed(futures):
-                prices = f.result()
+        batch_size = 8  # matches BrowserManager's page-pool concurrency ceiling
+        for i in range(0, len(pages_left), batch_size):
+            batch = pages_left[i:i + batch_size]
+            urls = [f"{base_url}?page={pg}&format=json{extra_qs}" for pg in batch]
+            texts = self._fetch_many(urls, retries=3)
+
+            stop = False
+            for t in texts:
+                if not t or not t.strip().startswith("{"):
+                    continue
+                try:
+                    d = json.loads(t)
+                except json.JSONDecodeError:
+                    continue
+                prices = [int(c.get("final_price", {}).get("value", 0))
+                          for c in d.get("catalogs", [])
+                          if int(c.get("final_price", {}).get("value", 0)) > 0]
                 all_prices.extend(prices)
-                # Early exit loop inside ThreadPoolExecutor if a cheaper competitor is found
                 if seller_price is not None and any(p <= seller_price for p in prices):
-                    break
+                    stop = True
+            if stop:
+                break
 
         return {
             "min_price":     min(all_prices) if all_prices else None,
@@ -1360,35 +1358,28 @@ class GeMScraper:
     # ── HTTP ────────────────────────────────────────────────────────────────
 
     def _fetch(self, url: str, retries: int = 3) -> str:
-        last_err = None
-        for attempt in range(retries):
-            try:
-                # Wait for our slot in the global concurrency queue before fetching
-                with GeMScraper._HTTP_SEMAPHORE:
-                    resp = self._session.get(url, timeout=20, allow_redirects=True)
-                resp.raise_for_status()
-                
-                # Check if GeM redirected us to the homepage or login page due to missing session
-                if "mkp.gem.gov.in" in resp.url and (resp.url.strip("/") == "https://mkp.gem.gov.in" or "login" in resp.url.lower()):
-                    if attempt < retries - 1:
-                        logger.warning(f"[Scraper] Redirect detected to {resp.url}, refreshing session cookies...")
-                        self._initialize_session()
-                        continue
-                        
-                return resp.text
-            except requests.RequestException as e:
-                last_err = e
-                # If we hit a 403 Forbidden or 401 Unauthorized, refresh the session cookies immediately
-                is_auth_error = isinstance(e, requests.HTTPError) and e.response is not None and e.response.status_code in (401, 403)
-                if is_auth_error and attempt < retries - 1:
-                    logger.warning(f"[Scraper] HTTP {e.response.status_code} detected, refreshing session cookies via Playwright...")
-                    self._initialize_session()
-                    time.sleep(2)
-                    continue
-                
-                if attempt < retries - 1:
-                    time.sleep(1 * (attempt + 1))
-        raise RuntimeError(f"Failed to fetch page after {retries} attempts: {last_err}")
+        """
+        Fetch a URL through the shared Playwright browser (needed to bypass
+        GeM's WAF, which blocks plain requests.Session calls).
+
+        Playwright's sync API can only be driven from the thread that
+        created it, so this delegates to BrowserManager.fetch(), which runs
+        the actual browser I/O on its own dedicated background thread
+        (async Playwright under the hood) and blocks this calling thread —
+        whichever thread that is — for the result. Safe to call from a
+        ThreadPoolExecutor worker.
+        """
+        from crawler import BrowserManager
+        return BrowserManager.get_instance().fetch(url, timeout=30000, retries=retries)
+
+    def _fetch_many(self, urls: list, retries: int = 2) -> list:
+        """
+        Fetch many URLs with genuine concurrent network I/O (all in flight
+        on BrowserManager's background event loop at once). Returns a list
+        aligned with `urls`; failed entries are None.
+        """
+        from crawler import BrowserManager
+        return BrowserManager.get_instance().fetch_many(urls, timeout=15000, retries=retries)
 
     # ── HELPERS ─────────────────────────────────────────────────────────────
 

@@ -24,99 +24,14 @@ logger = logging.getLogger("chain-hunt")
 
 def _chain_scrape(self, url: str, extra_params: dict, location: str = "") -> dict:
     """
-    Scrape page 1 & 2 of the category with filters applied.
+    Scrape page 1 & 2 of the category with filters applied using Playwright crawler.
     Returns {min_price, products, facets, total, seller_count, error}
     """
-    base_url = url.split("#")[0].split("?")[0]
-    if not base_url.endswith("/search"):
-        base_url = base_url.rstrip("/")
-
-    extra_qs = ""
-    if extra_params:
-        filtered = {k: self._normalize_filter_value(v) for k, v in extra_params.items()
-                    if k.lower() not in ("page", "format")}
-        if filtered:
-            extra_qs = "&" + urlencode(filtered)
-    if location and location.lower() not in ("", "all india", "all"):
-        extra_qs += "&localized_search=" + requests.utils.quote(location)
-
-    sort_suffix = ""
-    if "sort_type=" not in extra_qs:
-        sort_suffix = "&sort_type=price_in_asc"
-
-    page1_url = f"{base_url}?page=1&format=json{extra_qs}{sort_suffix}"
-    data1 = None
-    for attempt in range(3):
-        try:
-            text = self._fetch(page1_url, retries=2).strip()
-            if text.startswith("{"):
-                data1 = json.loads(text)
-                break
-        except Exception:
-            pass
-        time.sleep(1.0 * (attempt + 1))
-
-    if not data1:
-        return {"min_price": None, "products": [], "facets": {},
-                "total": 0, "seller_count": 0, "error": True}
-
-    total = data1.get("number_of_results", 0)
-    catalogs = data1.get("catalogs", [])
-    facets = data1.get("facets", {})
-
-    products = []
-    sellers = set()
-    for cat in catalogs:
-        price = int(cat.get("final_price", {}).get("value", 0))
-        if price <= 0:
-            continue
-        sid = cat.get("seller", {}).get("id", "")
-        sellers.add(sid)
-        products.append({
-            "id": cat.get("id", ""),
-            "name": cat.get("title", ""),
-            "price": price,
-            "seller": cat.get("seller", {}).get("name", ""),
-            "seller_id": sid,
-            "brand": cat.get("brand", ""),
-            "url": self._build_product_url(cat),
-        })
-
-    # Also fetch page 2 for better seller diversity count
-    if total > len(catalogs):
-        try:
-            p2url = f"{base_url}?page=2&format=json{extra_qs}{sort_suffix}"
-            t2 = self._fetch(p2url, retries=1).strip()
-            if t2.startswith("{"):
-                d2 = json.loads(t2)
-                for cat in d2.get("catalogs", []):
-                    price = int(cat.get("final_price", {}).get("value", 0))
-                    if price <= 0:
-                        continue
-                    sid = cat.get("seller", {}).get("id", "")
-                    sellers.add(sid)
-                    products.append({
-                        "id": cat.get("id", ""),
-                        "name": cat.get("title", ""),
-                        "price": price,
-                        "seller": cat.get("seller", {}).get("name", ""),
-                        "seller_id": sid,
-                        "brand": cat.get("brand", ""),
-                        "url": self._build_product_url(cat),
-                    })
-        except Exception:
-            pass
-
-    min_price = min((p["price"] for p in products), default=None)
-
-    return {
-        "min_price": min_price,
-        "products": products,
-        "facets": facets,
-        "total": total,
-        "seller_count": len(sellers),
-        "error": False,
-    }
+    from crawler import GeMCrawler
+    crawler = GeMCrawler()
+    res = crawler.crawl_filtered_prices(url, extra_params, location)
+    res["facets"] = {}
+    return res
 
 
 def _get_facet_values_for_key(self, facets: dict, filter_key: str, filter_name: str = "") -> list:
@@ -342,6 +257,14 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     golden_list = []
     for f in golden_filters:
         if f.get("isGolden") and f["filterKey"] not in excluded:
+            # Skip filter keys where < 30% of products have that spec populated (unreliable data)
+            key = f["filterKey"]
+            populated_count = sum(1 for p in products if p.get("specs", {}).get(key))
+            populated_ratio = populated_count / len(products) if products else 0
+            if populated_ratio < 0.3:
+                logger.info(f"[BFS Prune] Skipping filter {f.get('filterName')} ({key}) because only {populated_ratio:.0%} of products have it populated.")
+                continue
+
             sorted_vals = sort_spec_values(f.get("values", []))
             golden_list.append({
                 "filterKey": f["filterKey"],
@@ -361,7 +284,11 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     # Filter products matching active conditions
     def matches_filters(product_specs, active_dict):
         for k, v in active_dict.items():
-            if product_specs.get(k) != v:
+            val = product_specs.get(k)
+            if val is None:
+                # Spec data is missing - treat as matching (conservative)
+                continue
+            if val != v:
                 return False
         return True
 

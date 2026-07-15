@@ -1,16 +1,17 @@
 """
-GeM Filter Optimizer — FastAPI Backend
-Scrapes public GeM listing pages and finds filter combinations where
+GeM Filter Optimizer — FastAPI Backend (v5.0.0)
+
+Powered by Playwright-based browser crawling for complete, accurate
+GeM marketplace data extraction. Finds filter combinations where
 your product ranks #1 (cheapest price) in every filtered sub-niche.
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
-from scraper import GeMScraper
-from l1_surpasser import L1ChainSurpasser
+from contextlib import asynccontextmanager
 import hashlib
 import time
 import logging
@@ -24,15 +25,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger("gem-optimizer")
 
+
+# ── Application Lifecycle ────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage browser lifecycle: start on boot, shutdown on exit."""
+    logger.info("Starting GeM Filter Optimizer v5.0.0...")
+    try:
+        from crawler import BrowserManager
+        bm = BrowserManager.get_instance()
+        logger.info("Browser manager initialized.")
+    except Exception as e:
+        logger.warning(f"Browser pre-init skipped (will lazy-init on first request): {e}")
+    
+    yield  # App is running
+    
+    # Shutdown
+    logger.info("Shutting down browser...")
+    try:
+        from crawler import BrowserManager
+        BrowserManager.get_instance().shutdown()
+    except Exception:
+        pass
+    logger.info("Shutdown complete.")
+
+
 app = FastAPI(
-    title="GeM Filter Optimizer API", 
-    version="4.0.0",
+    title="GeM Filter Optimizer API",
+    version="5.0.0",
     docs_url="/api/docs",
-    openapi_url="/api/openapi.json"
+    openapi_url="/api/openapi.json",
+    lifespan=lifespan,
 )
 
 # ── Middlewares ───────────────────────────────────────────────────────────────
-app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses >1KB
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -77,21 +104,39 @@ class L1SurpassRequest(BaseModel):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@app.get("/")
+api_router = APIRouter(prefix="/api")
+
+@api_router.get("/")
 def root():
-    return {"status": "ok", "service": "GeM Filter Optimizer API", "version": "4.0.0"}
+    return {"status": "ok", "service": "GeM Filter Optimizer API", "version": "5.0.0"}
 
 
-@app.get("/locations")
+@api_router.get("/health")
+def health():
+    """Health check that verifies the browser is alive."""
+    try:
+        from crawler import BrowserManager
+        bm = BrowserManager.get_instance()
+        return {
+            "status": "healthy",
+            "browser_alive": bm.is_alive,
+            "version": "5.0.0",
+        }
+    except Exception as e:
+        return {"status": "degraded", "error": str(e), "version": "5.0.0"}
+
+
+@api_router.get("/locations")
 def locations():
     """Return the list of all Indian states/UTs for location filtering."""
+    from crawler import GeMCrawler
     return {
-        "locations": ["All India"] + GeMScraper.INDIAN_STATES,
-        "total": len(GeMScraper.INDIAN_STATES) + 1,
+        "locations": ["All India"] + GeMCrawler.INDIAN_STATES,
+        "total": len(GeMCrawler.INDIAN_STATES) + 1,
     }
 
 
-@app.post("/scrape")
+@api_router.post("/scrape")
 def scrape(req: ScrapeRequest):
     url = req.url.strip()
 
@@ -119,8 +164,10 @@ def scrape(req: ScrapeRequest):
         if time.time() - entry["ts"] < CACHE_TTL:
             return {**entry["data"], "cached": True}
 
-    scraper = GeMScraper()
-    result = scraper.scrape(url, location=req.location or "")
+    # Use new Playwright-based crawler
+    from crawler import GeMCrawler
+    crawler = GeMCrawler()
+    result = crawler.crawl_category(url, location=req.location or "")
 
     if not result.get("products"):
         is_product_page = "/product-detail/" in url or "/product/" in url
@@ -141,7 +188,7 @@ def scrape(req: ScrapeRequest):
     return {**result, "cached": False}
 
 
-@app.delete("/cache")
+@api_router.delete("/cache")
 def clear_cache():
     _cache.clear()
     return {"cleared": True}
@@ -149,13 +196,11 @@ def clear_cache():
 
 # ── Smart L1 Chain Hunt ───────────────────────────────────────────────────────
 
-@app.post("/chain-hunt")
+@api_router.post("/chain-hunt")
 def chain_hunt(req: ChainHuntRequest):
     """
-    Sequential L1 Chain Surpasser.
-    Iteratively eliminates each L1 blocker one-by-one through golden filter
-    application, re-evaluating the market after each change, until the
-    user's product becomes L1.
+    Sequential L1 Chain Surpasser (now powered by Playwright crawler).
+    Uses the new GeMCrawler for live verification of filter paths.
     """
     if req.target_price <= 0:
         raise HTTPException(status_code=400, detail="target_price must be > 0.")
@@ -168,8 +213,9 @@ def chain_hunt(req: ChainHuntRequest):
         )
 
     try:
+        # Use the existing chain_hunt logic via scraper (which now delegates to crawler)
+        from scraper import GeMScraper
         scraper = GeMScraper()
-        # Always exclude MSE — only manufacturers can use it, not resellers
         excluded = set(req.excluded_filter_keys or [])
         excluded.add("mse_applicable")
         result = scraper.smart_l1_discovery(
@@ -188,16 +234,16 @@ def chain_hunt(req: ChainHuntRequest):
 
 # ── Product Specifications ───────────────────────────────────────────────────
 
-@app.post("/product-specs")
+@api_router.post("/product-specs")
 def get_product_specs(req: ProductSpecRequest):
     """
-    Scrape live specifications for a single product.
+    Scrape live specifications for a single product using Playwright.
     Used for Clickable Competitor L2/L3 insights.
     """
     try:
-        scraper = GeMScraper()
-        # _scrape_product_page requires two arguments: url and variant_id
-        product_data = scraper._scrape_product_page(req.product_url, "")
+        from crawler import GeMCrawler
+        crawler = GeMCrawler()
+        product_data = crawler.crawl_product(req.product_url)
         return {"status": "success", "specs": product_data.get("specs", {})}
     except Exception as e:
         logger.error(f"Failed to scrape specs for {req.product_url}: {e}")
@@ -205,13 +251,11 @@ def get_product_specs(req: ProductSpecRequest):
 
 # ── Surgical Strike ──────────────────────────────────────────────────────────
 
-@app.post("/surgical-strike")
+@api_router.post("/surgical-strike")
 def surgical_strike(req: SurgicalStrikeRequest):
     """
     Surgical Strike: Analyze a specific competitor product.
-    Scrapes the competitor's product page to extract their specs,
-    matches them against golden filters, and identifies which filter
-    values to apply to exclude that competitor from the niche.
+    Now uses Playwright crawler for more reliable spec extraction.
     """
     if req.target_price <= 0:
         raise HTTPException(status_code=400, detail="target_price must be > 0.")
@@ -221,6 +265,7 @@ def surgical_strike(req: SurgicalStrikeRequest):
         product_url = "https://" + product_url
 
     try:
+        from scraper import GeMScraper
         scraper = GeMScraper()
         result = scraper.surgical_strike(
             product_url=product_url,
@@ -237,12 +282,11 @@ def surgical_strike(req: SurgicalStrikeRequest):
 
 # ── L1 Chain Surpasser (Hardened Engine) ────────────────────────────────────
 
-@app.post("/l1-surpass")
+@api_router.post("/l1-surpass")
 def l1_surpass(req: L1SurpassRequest):
     """
     Hardened L1 Chain Surpasser.
-    Sequential filter elimination with full-category scrapes,
-    offset-drift detection, deduplication, and structured logging.
+    Sequential filter elimination with full-category scrapes.
     """
     if req.my_price <= 0:
         raise HTTPException(status_code=400, detail="my_price must be > 0.")
@@ -250,6 +294,7 @@ def l1_surpass(req: L1SurpassRequest):
         raise HTTPException(status_code=400, detail="category_url is required.")
 
     try:
+        from l1_surpasser import L1ChainSurpasser
         surpasser = L1ChainSurpasser(
             category_url=req.category_url,
             my_catalogue_id=req.my_catalogue_id,
@@ -265,8 +310,11 @@ def l1_surpass(req: L1SurpassRequest):
         )
 
 
+# ── API Router Inclusion ──────────────────────────────────────────────────────
+app.include_router(api_router)
+
+
 # ── PRODUCTION STATIC FILE MOUNT ───────────────────────────────────────────────
-# Mounts compiled React static frontend if 'dist' folder exists in scope
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist")
 if os.path.isdir(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
