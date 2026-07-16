@@ -58,10 +58,12 @@ def make_bm_with_fake_loop():
     bm._browser.is_connected.return_value = True
     bm._context = MagicMock()
     bm._initialized = True
+    bm._crash_detected = False
     bm._init_lock = None
     bm._pool_lock = None
     bm._page_slots = None
     bm._page_pool = []
+    bm._cookie_refresh_lock = None
     return bm
 
 

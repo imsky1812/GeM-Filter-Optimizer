@@ -38,6 +38,31 @@ from urllib.parse import urlencode, urlparse, parse_qs
 
 logger = logging.getLogger("gem-crawler")
 
+# Substrings seen in real crashes of the underlying Playwright driver
+# connection (e.g. the Chromium process dying mid-session). Playwright's own
+# Browser.is_connected() does NOT reliably flip to False for these -- it's
+# only updated by an explicit close, not by the transport pipe dying -- so
+# BrowserManager tracks this itself instead of trusting is_connected().
+_DRIVER_CRASH_SIGNATURES = (
+    "Connection closed while reading from the driver",
+    "Target page, context or browser has been closed",
+    "Browser has been closed",
+)
+
+
+def _is_driver_crash_error(e: Exception) -> bool:
+    msg = str(e)
+    return any(sig in msg for sig in _DRIVER_CRASH_SIGNATURES)
+
+
+def _looks_like_login_redirect(current_url: str) -> bool:
+    """True if a page navigation landed on GeM's homepage/login instead of
+    the requested page -- the signature of an expired/invalid session."""
+    final_url = current_url.strip("/")
+    return "mkp.gem.gov.in" in final_url and (
+        final_url == "https://mkp.gem.gov.in" or "login" in final_url.lower()
+    )
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # BROWSER MANAGER — async Playwright on a dedicated background event loop
@@ -93,12 +118,17 @@ class BrowserManager:
         self._browser = None
         self._context = None
         self._initialized = False
+        # Set by _fetch_one_async when it observes a driver-crash signature.
+        # is_connected() doesn't reliably detect this, so we track it
+        # ourselves and force a relaunch on the next _ensure_initialized_async.
+        self._crash_detected = False
 
         # asyncio primitives — must be created on (or after) the loop starts
         self._init_lock: Optional[asyncio.Lock] = None
         self._pool_lock: Optional[asyncio.Lock] = None
         self._page_slots: Optional[asyncio.Semaphore] = None
         self._page_pool: list = []
+        self._cookie_refresh_lock: Optional[asyncio.Lock] = None
 
     @classmethod
     def get_instance(cls) -> "BrowserManager":
@@ -139,6 +169,7 @@ class BrowserManager:
                 self._init_lock = asyncio.Lock()
                 self._pool_lock = asyncio.Lock()
                 self._page_slots = asyncio.Semaphore(self._POOL_SIZE)
+                self._cookie_refresh_lock = asyncio.Lock()
                 self._loop_ready.set()
                 loop.run_forever()
 
@@ -162,11 +193,11 @@ class BrowserManager:
     # ── Browser lifecycle (executes ON the background loop) ───────────────
 
     async def _ensure_initialized_async(self):
-        if self._initialized and self._browser and self._browser.is_connected():
+        if self._initialized and self._browser and self._browser.is_connected() and not self._crash_detected:
             return
 
         async with self._init_lock:
-            if self._initialized and self._browser and self._browser.is_connected():
+            if self._initialized and self._browser and self._browser.is_connected() and not self._crash_detected:
                 return
 
             logger.info("[BrowserManager] Launching Chromium...")
@@ -231,8 +262,10 @@ class BrowserManager:
                 finally:
                     await page.close()
 
-                self._page_pool = []
+                async with self._pool_lock:
+                    self._page_pool = []
                 self._initialized = True
+                self._crash_detected = False
                 logger.info("[BrowserManager] Chromium ready.")
 
             except Exception as e:
@@ -272,15 +305,22 @@ class BrowserManager:
 
     async def refresh_cookies_async(self):
         await self._ensure_initialized_async()
-        page = await self._context.new_page()
-        try:
-            await page.goto("https://mkp.gem.gov.in/", timeout=30000, wait_until="domcontentloaded")
-            cookies = await self._context.cookies()
-            logger.info(f"[BrowserManager] Cookies refreshed: {len(cookies)}")
-        except Exception as e:
-            logger.warning(f"[BrowserManager] Cookie refresh failed: {e}")
-        finally:
-            await page.close()
+        # Serialize refreshes: this opens a page outside the _page_slots
+        # pool (a refresh can be triggered by a caller that's already
+        # holding a slot, so gating it on the same semaphore risks
+        # deadlock). The lock instead caps concurrent refreshes to one at
+        # a time, so a session expiry hitting many in-flight fetches at
+        # once can't spawn an unbounded number of extra pages simultaneously.
+        async with self._cookie_refresh_lock:
+            page = await self._context.new_page()
+            try:
+                await page.goto("https://mkp.gem.gov.in/", timeout=30000, wait_until="domcontentloaded")
+                cookies = await self._context.cookies()
+                logger.info(f"[BrowserManager] Cookies refreshed: {len(cookies)}")
+            except Exception as e:
+                logger.warning(f"[BrowserManager] Cookie refresh failed: {e}")
+            finally:
+                await page.close()
 
     # ── Low-level fetch primitive (used by scraper.py / l1_surpasser.py) ──
 
@@ -304,14 +344,14 @@ class BrowserManager:
                     return json_match.group(1)
 
                 # Detect GeM redirecting us to the homepage/login (session invalid)
-                final_url = page.url.strip("/")
-                if "mkp.gem.gov.in" in final_url and (
-                    final_url == "https://mkp.gem.gov.in" or "login" in final_url.lower()
-                ):
+                if _looks_like_login_redirect(page.url):
                     if attempt < retries - 1:
                         logger.warning(f"[Crawler] Redirect detected to {page.url}, refreshing session cookies...")
                         await self.refresh_cookies_async()
                         continue
+                    # Last attempt: don't return the login page as if it were
+                    # valid content -- raise so the caller sees a real failure.
+                    raise RuntimeError(f"GeM redirected to login/homepage on final attempt: {page.url}")
 
                 if not json_match:
                     try:
@@ -327,6 +367,12 @@ class BrowserManager:
             except Exception as e:
                 last_err = e
                 logger.warning(f"[Crawler] Fetch attempt {attempt + 1}/{retries} failed for {url}: {e}")
+                if _is_driver_crash_error(e):
+                    logger.error(
+                        "[BrowserManager] Driver crash detected -- marking browser dead "
+                        "so the next request forces a relaunch instead of reusing it."
+                    )
+                    self._crash_detected = True
                 if attempt < retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
             finally:
@@ -393,7 +439,10 @@ class BrowserManager:
 
     @property
     def is_alive(self) -> bool:
-        return bool(self._initialized and self._browser and self._browser.is_connected())
+        return bool(
+            self._initialized and self._browser and self._browser.is_connected()
+            and not self._crash_detected
+        )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -514,6 +563,18 @@ class GeMCrawler:
         page = await self._bm.acquire_page_async()
         try:
             await page.goto(product_url, timeout=25000, wait_until="domcontentloaded")
+
+            if _looks_like_login_redirect(page.url):
+                logger.warning(
+                    f"[Crawler] Product page redirected to login ({page.url}), "
+                    "refreshing session cookies and retrying once..."
+                )
+                await self._bm.refresh_cookies_async()
+                await page.goto(product_url, timeout=25000, wait_until="domcontentloaded")
+                if _looks_like_login_redirect(page.url):
+                    raise RuntimeError(
+                        f"GeM redirected to login even after cookie refresh: {page.url}"
+                    )
 
             # Wait for spec tables to load (event-driven — returns as soon
             # as they appear instead of always blocking for a fixed duration)
@@ -788,6 +849,18 @@ class GeMCrawler:
 
             logger.info(f"[Crawler] Playwright render: {url}")
             await page.goto(url, timeout=30000, wait_until="networkidle")
+
+            if _looks_like_login_redirect(page.url):
+                logger.warning(
+                    f"[Crawler] Playwright render redirected to login ({page.url}), "
+                    "refreshing session cookies and retrying once..."
+                )
+                await self._bm.refresh_cookies_async()
+                await page.goto(url, timeout=30000, wait_until="networkidle")
+                if _looks_like_login_redirect(page.url):
+                    raise RuntimeError(
+                        f"GeM redirected to login even after cookie refresh: {page.url}"
+                    )
 
             products = await self._extract_products_from_dom_async(page)
             filters = await self._extract_filters_from_dom_async(page)
