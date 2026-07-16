@@ -179,7 +179,28 @@ def _names_match(name1: str, name2: str) -> bool:
         return True
     k1 = re.sub(r'[^a-z0-9]', '', n1)
     k2 = re.sub(r'[^a-z0-9]', '', n2)
-    return k1 == k2 and len(k1) > 5
+    # k1 == k2 is already an exact match once punctuation/whitespace is
+    # stripped, so a short name is not a false-positive risk here (that
+    # would matter for a substring/prefix test, not equality) -- only
+    # guard against both sides degenerating to an empty string. A `len > 5`
+    # floor made short-but-real golden facet names (e.g. "BIS") never match
+    # a differently-punctuated rendering of the same name.
+    return bool(k1) and k1 == k2
+
+
+def _catalogue_id_matches(my_id: str, candidate_id: str) -> bool:
+    """
+    True if `candidate_id` is (or belongs to) the product identified by
+    `my_id`. Callers may provide just a product-family id without GeM's
+    "-<variant>" suffix (e.g. "5116877" for the full id
+    "5116877-93229099418"), so a prefix match is intentionally supported --
+    but anchored on the separator, so a shorter id can't accidentally match
+    as an unrelated substring elsewhere in an unrelated longer id (e.g.
+    "116877" incorrectly matching "45116877").
+    """
+    if not my_id:
+        return False
+    return candidate_id == my_id or candidate_id.startswith(my_id + "-")
 
 
 def _create_session() -> requests.Session:
@@ -272,7 +293,17 @@ class GeMCategoryScraper:
         if not text.startswith("{"):
             raise ValueError(f"Non-JSON response from page {page} (got HTML/empty)", text)
 
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            # A malformed/truncated body (e.g. a partial WAF block response)
+            # still starts with "{" but isn't valid JSON. json.JSONDecodeError
+            # is a ValueError with only one arg, so on its own it would slip
+            # past the 2-arg check below and propagate uncaught out of scrape()
+            # instead of degrading gracefully like the "not JSON at all" case
+            # already does -- raise the same 2-arg shape so the existing
+            # HTML-fallback recovery in _execute_full_scrape handles it too.
+            raise ValueError(f"Malformed JSON response from page {page}: {e}", text) from e
 
     # ── Product parsing ──────────────────────────────────────────────────────
 
@@ -403,7 +434,7 @@ class GeMCategoryScraper:
         my_product = None
         my_product_rank = None
         for i, p in enumerate(products):
-            if self._my_catalogue_id and self._my_catalogue_id in p["catalogue_id"]:
+            if _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"]):
                 my_product = p
                 my_product_rank = i + 1  # 1-indexed
                 break
@@ -1055,7 +1086,7 @@ class L1ChainSurpasser:
             current_L1 = None
             for p in products:
                 if p["price"] < self._my_price:
-                    if self._my_catalogue_id not in p["catalogue_id"]:
+                    if not _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"]):
                         current_L1 = p
                         break
 
@@ -1398,7 +1429,7 @@ class L1ChainSurpasser:
         # Check 1: is my product still present?
         if self._my_catalogue_id:
             my_present = any(
-                self._my_catalogue_id in p["catalogue_id"]
+                _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"])
                 for p in products
             )
             if not my_present:
@@ -1428,7 +1459,7 @@ class L1ChainSurpasser:
         new_L1 = None
         for p in products:
             if p["price"] < self._my_price:
-                if self._my_catalogue_id not in p["catalogue_id"]:
+                if not _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"]):
                     new_L1 = {
                         "catalogue_id": p["catalogue_id"],
                         "price": p["price"],
