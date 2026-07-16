@@ -1061,8 +1061,8 @@ class GeMScraper:
 
             self._product_specs_cache[url] = matched_specs
             product["specs"] = matched_specs
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[Enrich] Failed to fetch/parse specs for {url}: {e}")
         return product
 
     def _enrich_and_build_filters(self, products: list, facet_defs: list) -> tuple:

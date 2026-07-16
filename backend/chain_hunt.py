@@ -231,11 +231,22 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     
     # Enrich in parallel
     if to_enrich:
+        enrich_failures = 0
         with ThreadPoolExecutor(max_workers=min(10, len(to_enrich))) as executor:
             futures = [executor.submit(self._enrich_single_product, p, name_to_code) for p in to_enrich]
             for future in as_completed(futures):
                 api_calls[0] += 1
-                # _enrich_single_product modifies product in place
+                try:
+                    future.result()  # _enrich_single_product modifies product in place
+                except Exception as e:
+                    enrich_failures += 1
+                    logger.warning(f"[IMCDS] PDP enrichment task raised unexpectedly: {e}")
+        if enrich_failures:
+            logger.warning(
+                f"[IMCDS] {enrich_failures}/{len(to_enrich)} PDP enrichment tasks raised an "
+                "unexpected exception -- populated_ratio pruning below may be based on "
+                "incomplete data."
+            )
 
     # ── STEP 3: BFS SET-COVER SEARCH ──
     excluded = set(excluded_filter_keys or [])
@@ -401,8 +412,12 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     
     def verify_candidate(item):
         active_dict, steps_list, local_eval = item
-        # Build query parameters
+        # Build query parameters. Mandatory filters must be included here too --
+        # they were already folded into start_products for in-memory evaluation,
+        # but the live GeM query needs them explicitly or it verifies against
+        # the unfiltered category while activeFilters claims they were applied.
         params = dict(base_extra) if base_extra else {}
+        params.update(start_filters)
         params.update(active_dict)
         # Live scrape page 1 & 2
         live_res = self._chain_scrape(category_url, params, location)
