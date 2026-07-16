@@ -184,14 +184,56 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                         all_products.extend(res)
                 except Exception as e:
                     logger.error(f"[IMCDS] Error on page {page}: {e}")
-    # Deduplicate and sort ascending by price
-    seen = {}
-    for p in all_products:
-        cid = p["catalogue_id"]
-        if cid not in seen or p["price"] < seen[cid]["price"]:
-            seen[cid] = p
-    products = sorted(seen.values(), key=lambda p: p["price"])
-    
+    def dedupe_and_sort(raw_products: list) -> list:
+        seen = {}
+        for p in raw_products:
+            cid = p["catalogue_id"]
+            if cid not in seen or p["price"] < seen[cid]["price"]:
+                seen[cid] = p
+        return sorted(seen.values(), key=lambda p: p["price"])
+
+    products = dedupe_and_sort(all_products)
+
+    # If very few (or zero) sampled products are priced above target_price,
+    # the ascending-sorted page cap left us blind to the part of the market
+    # we actually care about -- common for a large category flooded with
+    # cheap listings, where 20 pages * ~12/page (GeM's real page size) can be
+    # entirely consumed by products well below the target price, leaving
+    # almost no genuine non-blocker data for the search to work with.
+    # Supplement with a few price-descending pages so there's a real sample
+    # of higher-priced products to build a genuine win or an honest
+    # achievable-ceiling estimate from.
+    MIN_NON_BLOCKERS_WANTED = 10
+    SUPPLEMENT_PAGES = 3
+    non_blocker_count = sum(1 for p in products if p["price"] > target_price)
+    if non_blocker_count < MIN_NON_BLOCKERS_WANTED and total_results > len(products):
+        logger.info(
+            f"[IMCDS] Only {non_blocker_count} products above target price in the "
+            f"ascending sample -- fetching {SUPPLEMENT_PAGES} price-descending "
+            "pages to fill in the high end."
+        )
+        desc_qs = extra_qs.replace("sort_type=price_in_asc", "sort_type=price_in_desc")
+        for page in range(1, SUPPLEMENT_PAGES + 1):
+            purl = f"{base_url}?page={page}&format=json{desc_qs}"
+            try:
+                t = self._fetch(purl, retries=2).strip()
+                api_calls[0] += 1
+                if not t.startswith("{"):
+                    continue
+                d = json.loads(t)
+                for cat in d.get("catalogs", []):
+                    p = parse_catalog(cat)
+                    if p:
+                        all_products.append(p)
+            except Exception as e:
+                logger.warning(f"[IMCDS] Failed to fetch descending page {page}: {e}")
+
+        products = dedupe_and_sort(all_products)
+        logger.info(
+            f"[IMCDS] After descending supplement: "
+            f"{sum(1 for p in products if p['price'] > target_price)} products above target price."
+        )
+
     # ── STEP 2: ENRICH ONLY RELEVANT PRODUCTS ──
     # Extract facet definitions from page 1 to get name_to_code mapping
     facet_defs = self._extract_facet_defs(facets)
