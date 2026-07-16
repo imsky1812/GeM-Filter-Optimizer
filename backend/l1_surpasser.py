@@ -950,6 +950,7 @@ class L1ChainSurpasser:
         self._api_calls = 0
         self._t_start = 0.0
         self._my_specs: dict = {}
+        self._scrape_error_count = 0
 
     def _fetch_my_specs(self, product_url: str) -> dict:
         """
@@ -1006,6 +1007,11 @@ class L1ChainSurpasser:
             if time.time() - self._t_start > self.MAX_TIME:
                 logger.warning("[L1Surpass] Time limit reached.")
                 return self._build_result("timeout")
+
+            # Reset per-iteration so Step 6 can tell whether a "stuck" verdict
+            # is based on clean verifications or was contaminated by transient
+            # scrape failures during this iteration's candidate checks.
+            self._scrape_error_count = 0
 
             # ── Step 1: Full scrape with current filters ─────────────────────
             scraper = GeMCategoryScraper(
@@ -1119,6 +1125,33 @@ class L1ChainSurpasser:
                 continue
 
             # ── Step 6: Stuck — this L1 is unbypassable ──────────────────────
+            if self._scrape_error_count > 0:
+                # Some candidates couldn't be verified due to transient scrape
+                # failures this iteration -- a confident "unbypassable" verdict
+                # would be based on incomplete data. Report the uncertainty
+                # instead of a false-confident STUCK.
+                logger.warning(
+                    f"[L1Surpass] Cannot confidently declare '{current_L1['name'][:40]}' "
+                    f"unbypassable: {self._scrape_error_count} candidate(s) hit a "
+                    "scrape error this iteration and were never actually verified."
+                )
+                self._iteration_log.append({
+                    "iteration": iteration,
+                    "target_L1": {
+                        "catalogue_id": current_L1["catalogue_id"],
+                        "price": current_L1["price"],
+                    },
+                    "result": "verification_incomplete",
+                    "scrape_error_count": self._scrape_error_count,
+                    "active_filters": dict(self._active_filters),
+                })
+                return self._build_result(
+                    "verification_incomplete",
+                    stuck_at={"catalogue_id": current_L1["catalogue_id"],
+                              "price": current_L1["price"],
+                              "name": current_L1["name"]},
+                )
+
             logger.info(
                 f"[L1Surpass] STUCK: '{current_L1['name'][:40]}' "
                 f"Rs. {current_L1['price']:,} is unbypassable"
@@ -1210,6 +1243,16 @@ class L1ChainSurpasser:
             if result["status"] == "too_few_sellers":
                 log_entry["result"] = "skipped_min_sellers"
                 log_entry["seller_count"] = result.get("seller_count", 0)
+                self._iteration_log.append(log_entry)
+                continue
+
+            if result["status"] == "scrape_error":
+                # Transient failure verifying this candidate -- do NOT log it
+                # as "the filter doesn't help" (not_eliminated). Track it so
+                # Step 6 knows a "stuck" verdict here would be unreliable.
+                self._scrape_error_count += 1
+                log_entry["result"] = "scrape_error"
+                log_entry["error"] = result.get("error")
                 self._iteration_log.append(log_entry)
                 continue
 
@@ -1306,6 +1349,9 @@ class L1ChainSurpasser:
                 )
                 return True
 
+            if result["status"] == "scrape_error":
+                self._scrape_error_count += 1
+
             self._iteration_log.append(log_entry)
 
         return False
@@ -1344,10 +1390,10 @@ class L1ChainSurpasser:
         products = data["products"]
         stats = data["scrape_stats"]
 
-        # No products at all — this filter wipes everything
-        if not products:
-            return {"status": "l1_eliminated", "new_L1": None,
-                    "my_rank": None, "scrape_stats": stats}
+        # Note: if `products` is empty, Check 1 below correctly falls through
+        # to "my_product_missing" (my own listing can't be present in an
+        # empty result set either) rather than being treated as a win --
+        # a filter that shows nobody, including me, is not an elimination.
 
         # Check 1: is my product still present?
         if self._my_catalogue_id:
