@@ -419,10 +419,28 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 len(steps_list)    # Shorter chain is better
             )
         filtered_partials.sort(key=sort_local_partial_key)
-        
+
         # Add the best partial paths up to a cap of 15 candidates
         needed = 15 - len(candidates)
-        candidates += filtered_partials[:needed]
+        top_by_blockers = filtered_partials[:needed]
+
+        # "Fewest blockers remaining" is the right heuristic for suggesting
+        # the next step of an elimination chain, but it can silently exclude
+        # a state with a genuinely higher achievable price just because it
+        # happens to have more blockers left -- understating
+        # bestAchievablePrice below what the search actually found. Make
+        # sure the single highest-price partial state always gets a chance
+        # at live verification too, even if its blocker count would
+        # otherwise have ranked it out of the top `needed`.
+        best_by_price = max(
+            filtered_partials,
+            key=lambda item: item[2]["min_price"] or 0,
+            default=None,
+        ) if filtered_partials else None
+
+        candidates += top_by_blockers
+        if best_by_price is not None and best_by_price not in top_by_blockers:
+            candidates.append(best_by_price)
         
     verified_paths = []
     
