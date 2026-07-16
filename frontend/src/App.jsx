@@ -56,6 +56,10 @@ export default function App() {
     setActiveTool(null);
     setCurrentStep(1);
     setFurthestStep(1);
+    setSelectedCompetitor(null);
+    setCompetitorSpecs(null);
+    setIsFetchingSpecs(false);
+    setCompetitorSpecsError("");
   };
 
   // Surgical Strike state
@@ -314,7 +318,7 @@ export default function App() {
         />
       )}
 
-      {currentStep === 4 && (
+      {currentStep === 4 && priceNum > 0 && (
         <>
           <div className="step4-toolbar">
             <button className="btn-back" onClick={() => setCurrentStep(3)}>

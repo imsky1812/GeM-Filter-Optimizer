@@ -9,8 +9,8 @@ export default function StepIndicator({ currentStep, furthestStep, onStepClick }
   return (
     <div className="step-indicator">
       {STEPS.map((step, idx) => {
-        const isCompleted = step.id < currentStep;
         const isCurrent = step.id === currentStep;
+        const isCompleted = step.id < currentStep || (step.id <= furthestStep && !isCurrent);
         const isClickable = step.id <= furthestStep && !isCurrent;
         const state = isCurrent ? "current" : isCompleted ? "done" : "upcoming";
 
