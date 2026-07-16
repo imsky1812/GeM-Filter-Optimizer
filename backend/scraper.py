@@ -24,6 +24,14 @@ class GeMScraper:
     # completely insulating our server from firing Firewall-banning spikes.
     _HTTP_SEMAPHORE = threading.BoundedSemaphore(8)
     _COOKIE_LOCK = threading.Lock()
+    # Class-level (not instance-level) so the 30s refresh throttle actually
+    # engages across requests -- main.py creates a fresh GeMScraper() per
+    # request, so an instance attribute here would always start unset and
+    # never throttle anything. The cookies themselves are cached here too
+    # so a throttled (skipped-refresh) instance still gets a valid,
+    # cookied session instead of an empty one.
+    _last_cookie_refresh_time: float | None = None
+    _cached_cookies: list = []
 
     HEADERS = {
         "User-Agent": (
@@ -108,14 +116,28 @@ class GeMScraper:
         
         self._initialize_session()
 
+    def _apply_cookies(self, cookies: list):
+        """Load a list of Playwright cookie dicts into this instance's requests session."""
+        self._session.cookies.clear()
+        for cookie in cookies:
+            self._session.cookies.set(
+                cookie["name"],
+                cookie["value"],
+                domain=cookie["domain"],
+                path=cookie["path"]
+            )
+
     def _refresh_session_cookies_with_playwright(self):
         """Launch headless Playwright browser to establish valid session cookies on GeM."""
         with GeMScraper._COOKIE_LOCK:
             now = time.time()
-            if hasattr(self, "_last_cookie_refresh_time") and now - self._last_cookie_refresh_time < 30:
-                logger.info("[Playwright] Cookies were refreshed recently, skipping redundant refresh.")
+            if (GeMScraper._last_cookie_refresh_time is not None
+                    and now - GeMScraper._last_cookie_refresh_time < 30
+                    and GeMScraper._cached_cookies):
+                logger.info("[Playwright] Cookies were refreshed recently, reusing cached session cookies.")
+                self._apply_cookies(GeMScraper._cached_cookies)
                 return True
-                
+
             logger.info("[Playwright] Refreshing session cookies via headless Chromium...")
             try:
                 from playwright.sync_api import sync_playwright
@@ -126,21 +148,14 @@ class GeMScraper:
                     )
                     page = context.new_page()
                     page.goto("https://mkp.gem.gov.in/", timeout=30000)
-                    
+
                     # Extract cookies
                     cookies = context.cookies()
                     browser.close()
-                    
-                # Clear current cookies and inject the new ones
-                self._session.cookies.clear()
-                for cookie in cookies:
-                    self._session.cookies.set(
-                        cookie["name"],
-                        cookie["value"],
-                        domain=cookie["domain"],
-                        path=cookie["path"]
-                    )
-                self._last_cookie_refresh_time = now
+
+                self._apply_cookies(cookies)
+                GeMScraper._cached_cookies = cookies
+                GeMScraper._last_cookie_refresh_time = now
                 logger.info(f"[Playwright] Successfully loaded {len(cookies)} cookies into requests session.")
                 return True
             except Exception as e:
@@ -620,18 +635,21 @@ class GeMScraper:
 
             search_url = f"https://mkp.gem.gov.in/search?q={search_q}&format=json"
             try:
-                r = self._session.get(search_url, timeout=15)
-                soup_search = BeautifulSoup(r.text, "html.parser")
+                # Use the Playwright-backed bridge, not self._session -- plain
+                # requests calls to GeM are blocked by its WAF (see _fetch's
+                # own docstring), which this function was the one place in
+                # the file that didn't do.
+                text = self._fetch(search_url)
+                soup_search = BeautifulSoup(text, "html.parser")
                 for a in soup_search.find_all("a", href=True):
                     href = a.get("href", "")
                     if "/search" in href and href != "/search":
                         full_url = href if href.startswith("http") else f"https://mkp.gem.gov.in{href}"
                         test_url = full_url.split("#")[0] + "?format=json"
                         try:
-                            r2 = self._session.get(test_url, timeout=10)
-                            text = r2.text.strip()
-                            if text.startswith("{"):
-                                data = json.loads(text)
+                            text2 = self._fetch(test_url).strip()
+                            if text2.startswith("{"):
+                                data = json.loads(text2)
                                 for cat in data.get("catalogs", []):
                                     if catalog_id in str(cat.get("id", "")):
                                         return full_url.split("#")[0]
@@ -1390,7 +1408,14 @@ class GeMScraper:
             return True
         k1 = re.sub(r'[^a-z0-9]', '', n1)
         k2 = re.sub(r'[^a-z0-9]', '', n2)
-        return k1 == k2 and len(k1) > 5
+        # k1 == k2 is already an exact match once punctuation/whitespace is
+        # stripped -- there's no ambiguity risk from a short name here (that
+        # would be a concern for a substring/prefix test, not equality), so
+        # only guard against both sides degenerating to an empty string.
+        # Real golden facet names can be short (e.g. "BIS"), and requiring
+        # len > 5 made those never match a differently-punctuated rendering
+        # of the same name on a product detail page.
+        return bool(k1) and k1 == k2
 
     def _parse_price(self, text: str) -> int | None:
         cleaned = re.sub(r'[₹,\s]', '', text)
