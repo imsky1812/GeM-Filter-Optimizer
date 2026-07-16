@@ -257,12 +257,17 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     golden_list = []
     for f in golden_filters:
         if f.get("isGolden") and f["filterKey"] not in excluded:
-            # Skip filter keys where < 30% of products have that spec populated (unreliable data)
+            # Skip filter keys where < 30% of the *enrichment-eligible* products have
+            # that spec populated (unreliable data). PDP enrichment only ever runs
+            # against relevant_products (the capped blockers/non-blockers pool), never
+            # the full bulk-scraped category, so the ratio must use that same
+            # denominator -- comparing against `products` would make the gate
+            # unpassable for any category bigger than ~130 products.
             key = f["filterKey"]
-            populated_count = sum(1 for p in products if p.get("specs", {}).get(key))
-            populated_ratio = populated_count / len(products) if products else 0
+            populated_count = sum(1 for p in relevant_products if p.get("specs", {}).get(key))
+            populated_ratio = populated_count / len(relevant_products) if relevant_products else 0
             if populated_ratio < 0.3:
-                logger.info(f"[BFS Prune] Skipping filter {f.get('filterName')} ({key}) because only {populated_ratio:.0%} of products have it populated.")
+                logger.info(f"[BFS Prune] Skipping filter {f.get('filterName')} ({key}) because only {populated_ratio:.0%} of enriched products have it populated.")
                 continue
 
             sorted_vals = sort_spec_values(f.get("values", []))
