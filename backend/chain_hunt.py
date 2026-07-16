@@ -157,6 +157,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         try:
             t = self._fetch(purl, retries=2).strip()
             if not t.startswith("{"):
+                logger.warning(f"[IMCDS] Page {page} response is not JSON: {t[:200]}")
                 return []
             d = json.loads(t)
             page_products = []
@@ -165,7 +166,8 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 if p:
                     page_products.append(p)
             return page_products
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[IMCDS] Failed to fetch page {page}: {e}")
             return []
 
     if total_pages > 1 and not (page1_prices and min(page1_prices) > target_price * 1.5):
@@ -385,6 +387,20 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
 
 
     # ── STEP 4: PARALLEL LIVE PATH VERIFICATION ──
+    # Sort winning paths by quality before capping to 20 -- otherwise which
+    # candidates get (expensive, rate-limited) live verification depends on
+    # arbitrary BFS discovery order, and a strictly better win can be
+    # dropped before ever being checked.
+    def sort_local_winning_key(item):
+        active_dict, steps_list, eval_res = item
+        is_untapped = eval_res["total"] == 0
+        gap = (eval_res["min_price"] - target_price) if eval_res["min_price"] else 0
+        return (
+            0 if not is_untapped else 1,  # a real (non-untapped) win is preferred
+            len(steps_list),              # shorter chain is better
+            -gap,                          # larger price gap is better
+        )
+    local_winning_paths.sort(key=sort_local_winning_key)
     candidates = local_winning_paths[:20]
     if len(candidates) < 15:
         # Filter out empty path and sort partial paths so that those eliminating the most blockers (in-memory) are preferred,
