@@ -981,22 +981,21 @@ class GeMScraper:
                 params = {match["filterKey"]: alt_val_clean}
                 if base_extra:
                     params.update(base_extra)
-                if location and location != "All India":
-                    params["sellers_si"] = location
 
                 try:
-                    data = self._fetch_json_page(category_url_clean, page=1, extra_params=params)
+                    scrape_result = self._fast_price_scrape(
+                        category_url_clean, params, location, seller_price=target_price
+                    )
                     api_calls += 1
-                except:
+                except Exception as e:
+                    logger.warning(
+                        f"[SurgicalStrike] Counter-filter scrape failed for "
+                        f"{match['filterKey']}={alt_val_clean}: {e}"
+                    )
                     continue
 
-                total = data.get("total", 0)
-                min_price = None
-                products = data.get("data", [])
-                if products:
-                    prices = [p.get("totalPriceWithoutConvenience") or p.get("price") or 0
-                              for p in products if (p.get("totalPriceWithoutConvenience") or p.get("price") or 0) > 0]
-                    min_price = min(prices) if prices else None
+                total = scrape_result.get("total", 0)
+                min_price = scrape_result.get("min_price")
 
                 counter_filters.append({
                     "filterKey": match["filterKey"],
