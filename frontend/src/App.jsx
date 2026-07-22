@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ArrowLeft } from "@phosphor-icons/react";
 import "./index.css";
 
 // Import sub-components
@@ -263,7 +264,7 @@ export default function App() {
     : 0;
 
   return (
-    <div className="app">
+    <div className={`app${currentStep === 4 ? " app-wide" : ""}`}>
       <Header />
 
       <StepIndicator
@@ -322,7 +323,7 @@ export default function App() {
         <>
           <div className="step4-toolbar">
             <button className="btn-back" onClick={() => setCurrentStep(3)}>
-              <span>←</span> Back
+              <ArrowLeft size={15} weight="bold" /> Back
             </button>
             <button className="btn" onClick={handleStartOver}>
               Start over

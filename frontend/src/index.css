@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap');
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    OBSIDIAN PRECISION — Design System for GeM Filter Optimizer v5
@@ -8,54 +8,62 @@
 /* ── Reset ──────────────────────────────────────────────────────────────────── */
 *,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
 
-/* ── Design Tokens ────────────────────────────────────────────────────────── */
+/* ── Design Tokens ─────────────────────────────────────────────────────────
+   Black-first: the unguarded :root is the dark theme, so the page is dark
+   before any JS runs (no flash of a light page). [data-theme="light"] below
+   is the opt-in override the toggle switches on. ──────────────────────── */
 :root {
-  /* Surface layers (light theme) */
-  --surface-lowest:  #FAFAFB;
-  --surface-low:     #FFFFFF;
-  --surface-base:    #FFFFFF;
-  --surface-1:       #F5F5F7;
-  --surface-2:       #EEEEF1;
-  --surface-3:       #E5E7EB;
-  --surface-4:       #D8D8DE;
-  --surface-bright:  #FFFFFF;
+  /* Surface layers (dark theme, default) */
+  --surface-lowest:  #0B0B0F;
+  --surface-low:     #131318;
+  --surface-base:    #17171D;
+  --surface-1:       #1D1D24;
+  --surface-2:       #24242C;
+  --surface-3:       #2E2E38;
+  --surface-4:       #3A3A46;
+  --surface-bright:  #1D1D24;
 
   /* Text hierarchy (verified ≥4.5:1 contrast against surface-base) */
-  --ink:             #1A1A1F;
-  --ink-muted:       #4B4B57;
-  --ink-subtle:      #7A7A87;
-  --ink-ghost:       #B8B8C2;
+  --ink:             #F5F5F7;
+  --ink-muted:       #B4B4C2;
+  --ink-subtle:      #82828F;
+  --ink-ghost:       #4B4B57;
 
-  /* Brand: Primary Indigo */
-  --primary:          #4F46E5;
-  --primary-bright:   #6366F1;
-  --primary-dim:      #4338CA;
-  --primary-glow:     #EEF2FF;
+  /* Brand: Primary Red */
+  --primary:          #F0353F;
+  --primary-bright:   #FF5C68;
+  --primary-dim:      #C4222C;
+  --primary-glow:     rgba(240, 53, 63, 0.18);
 
   /* Semantic: Success (Green) */
-  --success:          #16A34A;
-  --success-bright:   #22C55E;
-  --success-glow:     #F0FDF4;
+  --success:          #22C55E;
+  --success-bright:   #4ADE80;
+  --success-glow:     rgba(34, 197, 94, 0.16);
 
-  /* Semantic: Warning/Highlight (Amber) */
-  --amber:            #D97706;
-  --amber-bright:     #F59E0B;
-  --amber-glow:       #FFFBEB;
+  /* Semantic: Warning/Caution (Yellow) */
+  --amber:            #EAB308;
+  --amber-bright:     #FDE047;
+  --amber-glow:       rgba(234, 179, 8, 0.16);
 
-  /* Semantic: Danger/Competitor (Red) */
-  --danger:           #DC2626;
-  --danger-bright:    #EF4444;
-  --danger-glow:      #FEF2F2;
+  /* Semantic: Danger/Blocked (Orange -- distinct hue from primary red) */
+  --danger:           #F97316;
+  --danger-bright:    #FB923C;
+  --danger-glow:      rgba(249, 115, 22, 0.16);
 
-  /* Flat surfaces (no glass/blur effects in the light theme) */
-  --glass:            #FFFFFF;
-  --glass-border:     #E5E7EB;
-  --glass-hover:      #F5F5F7;
-  --glass-active:     #EEEEF1;
+  /* Flat surfaces (no glass/blur effects) */
+  --glass:            #17171D;
+  --glass-border:     #2A2A33;
+  --glass-hover:      #1D1D24;
+  --glass-active:     #24242C;
+
+  /* Ambient glow behind the hero (dark theme reads best with real depth) */
+  --glow-color: rgba(240, 53, 63, 0.20);
+  --grain-opacity: 0.05;
 
   /* Typography */
-  --font-body:   'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono:   var(--font-body);
+  --font-body:    'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono:    var(--font-body);
+  --font-display: 'Space Grotesk', var(--font-body);
 
   /* Radii */
   --radius-xs:   4px;
@@ -76,9 +84,9 @@
   --space-12:  48px;
 
   /* Shadows (flat at rest; only used on hover per component rules) */
-  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.06);
-  --shadow-lg:  0 12px 32px rgba(0, 0, 0, 0.10);
+  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.36);
+  --shadow-lg:  0 12px 32px rgba(0, 0, 0, 0.48);
 
   /* Motion */
   --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
@@ -96,6 +104,52 @@
   --z-toast:    500;
 }
 
+/* ── Light Theme (opt-in override) ───────────────────────────────────────── */
+:root[data-theme="light"] {
+  --surface-lowest:  #FAFAFB;
+  --surface-low:     #FFFFFF;
+  --surface-base:    #FFFFFF;
+  --surface-1:       #F5F5F7;
+  --surface-2:       #EEEEF1;
+  --surface-3:       #E5E7EB;
+  --surface-4:       #D8D8DE;
+  --surface-bright:  #FFFFFF;
+
+  --ink:             #1A1A1F;
+  --ink-muted:       #4B4B57;
+  --ink-subtle:      #7A7A87;
+  --ink-ghost:       #B8B8C2;
+
+  --primary:          #E5232D;
+  --primary-bright:   #F0353F;
+  --primary-dim:      #B91C24;
+  --primary-glow:     #FDEBEC;
+
+  --success:          #16A34A;
+  --success-bright:   #22C55E;
+  --success-glow:     #F0FDF4;
+
+  --amber:            #A16207;
+  --amber-bright:     #CA8A04;
+  --amber-glow:       #FEFCE8;
+
+  --danger:           #C2410C;
+  --danger-bright:    #EA580C;
+  --danger-glow:      #FFF7ED;
+
+  --glass:            #FFFFFF;
+  --glass-border:     #E5E7EB;
+  --glass-hover:      #F5F5F7;
+  --glass-active:     #EEEEF1;
+
+  --glow-color: rgba(240, 53, 63, 0.06);
+  --grain-opacity: 0.02;
+
+  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-lg:  0 12px 32px rgba(0, 0, 0, 0.10);
+}
+
 /* ── Base ───────────────────────────────────────────────────────────────────── */
 html {
   font-size: 16px;
@@ -104,6 +158,7 @@ html {
   text-rendering: optimizeLegibility;
 }
 
+
 body {
   font-family: var(--font-body);
   background: var(--surface-lowest);
@@ -111,6 +166,30 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   line-height: 1.6;
+  position: relative;
+}
+
+/* Ambient glow -- sits behind everything (.app is z-index:1), fades with theme */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 900px 520px at 18% -8%, var(--glow-color), transparent 62%);
+  transition: background var(--duration-lg) var(--ease-out);
+}
+
+/* Grain -- a barely-there texture veil, fixed so it never repaints on scroll */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 /* ── Animations ─────────────────────────────────────────────────────────────── */
@@ -139,6 +218,11 @@ body {
   }
 }
 
+/* Icons (Phosphor) placed inline within text -- nudge to sit on the text baseline */
+.inline-icon {
+  vertical-align: -2px;
+}
+
 .fade-in    { animation: fadeUp var(--duration-lg) var(--ease-out) both; }
 .fade-in-d1 { animation-delay: 80ms; }
 .fade-in-d2 { animation-delay: 160ms; }
@@ -151,29 +235,87 @@ body {
   max-width: 960px;
   margin: 0 auto;
   padding: var(--space-12) var(--space-6) 6rem;
+  transition: max-width var(--duration-lg) var(--ease-out);
+}
+
+/* Results carry denser content (stat grids, timelines, competitor cards) --
+   give that step more room instead of squeezing it into the form-step width. */
+.app-wide {
+  max-width: 1180px;
 }
 
 /* ── Header ─────────────────────────────────────────────────────────────────── */
 .hdr {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
   margin-bottom: var(--space-10);
   animation: fadeUp 500ms var(--ease-out);
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-base);
+  color: var(--ink-subtle);
+  cursor: pointer;
+  transition: all var(--duration-md) var(--ease-out);
+}
+
+.theme-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+@media (max-width: 640px) {
+  .hdr {
+    flex-direction: column-reverse;
+  }
+}
+
+.hdr-eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .hdr-eyebrow {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--primary-bright);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  margin-bottom: var(--space-3);
+  white-space: nowrap;
+}
+
+.hdr-dots {
+  flex: 1;
+  height: 1px;
+  min-width: 24px;
+  background-image: radial-gradient(circle, var(--glass-border) 1px, transparent 1.5px);
+  background-size: 6px 1px;
+  background-repeat: repeat-x;
+}
+
+@media (max-width: 640px) {
+  .hdr-dots { display: none; }
 }
 
 .hdr h1 {
-  font-size: clamp(1.75rem, 4vw, 2.5rem);
-  font-weight: 800;
+  font-family: var(--font-display);
+  font-size: clamp(2.25rem, 6vw, 4rem);
+  font-weight: 700;
   letter-spacing: -0.03em;
-  line-height: 1.15;
+  line-height: 1.05;
   color: var(--ink);
   text-wrap: balance;
 }
@@ -309,8 +451,8 @@ body {
 }
 
 .step-num {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-family: var(--font-display);
+  font-size: 0.75rem;
   font-weight: 700;
   color: var(--primary-bright);
   background: var(--primary-glow);
@@ -331,7 +473,8 @@ body {
 }
 
 .card-title {
-  font-size: 0.9375rem;
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
   font-weight: 700;
   color: var(--ink);
 }
@@ -450,9 +593,11 @@ input:focus {
   font-family: var(--font-body);
   font-size: 0.875rem;
   font-weight: 600;
-  border: none;
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
   cursor: pointer;
+  background: var(--surface-base);
+  color: var(--ink-muted);
   transition: all var(--duration-md) var(--ease-out);
   white-space: nowrap;
   flex-shrink: 0;
@@ -460,6 +605,7 @@ input:focus {
 
 .btn-primary {
   background: var(--primary);
+  border-color: var(--primary);
   color: #fff;
   box-shadow: var(--shadow-sm);
 }
@@ -485,7 +631,7 @@ input:focus {
   color: var(--ink);
 }
 
-/* ── Chain Hunt Trigger (special CTA) ───────────────────────────────────────── */
+/* ── Chain Hunt Trigger (primary CTA — same accent as .btn-primary) ─────────── */
 .chain-hunt-trigger {
   display: inline-flex;
   align-items: center;
@@ -499,8 +645,8 @@ input:focus {
   border: none;
   border-radius: var(--radius);
   cursor: pointer;
-  color: #0a0b0f;
-  background: var(--amber);
+  color: #fff;
+  background: var(--primary);
   box-shadow: var(--shadow-sm);
   transition: all var(--duration-md) var(--ease-out);
   white-space: nowrap;
@@ -594,6 +740,19 @@ input:focus {
   letter-spacing: -0.01em;
 }
 
+/* Hide the native number spinner -- it's a browser-default control sitting
+   inside an otherwise fully custom-styled input. */
+.price-wrap input::-webkit-outer-spin-button,
+.price-wrap input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.price-wrap input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 /* ── Chain Hunt Results ─────────────────────────────────────────────────────── */
 .chain-hunt-panel {
   padding: 0;
@@ -655,9 +814,9 @@ input:focus {
 }
 
 .chain-stat-val {
-  font-size: 1.25rem;
-  font-weight: 800;
-  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: var(--font-display);
   color: var(--ink);
 }
 
@@ -672,6 +831,17 @@ input:focus {
 
 .chain-stat-win .chain-stat-val  { color: var(--success); }
 .chain-stat-api .chain-stat-val  { color: var(--primary-bright); }
+
+/* Bento-style variety -- not every tile needs to be the same flat neutral. */
+.chain-stat-win {
+  background: linear-gradient(160deg, var(--success-glow) 0%, var(--surface-1) 100%);
+  border-color: var(--success);
+}
+
+.chain-stat-api {
+  background: linear-gradient(160deg, var(--primary-glow) 0%, var(--surface-1) 100%);
+  border-color: var(--primary);
+}
 
 /* ── Path Tabs ──────────────────────────────────────────────────────────────── */
 .chain-path-tabs {
@@ -869,6 +1039,7 @@ input:focus {
 
 /* ── Victory Card ───────────────────────────────────────────────────────────── */
 .chain-victory-card {
+  position: relative;
   background: var(--success-glow);
   border: 1px solid var(--success);
   border-radius: var(--radius);
@@ -885,8 +1056,9 @@ input:focus {
 }
 
 .chain-victory-tag {
-  font-size: 1rem;
-  font-weight: 800;
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 700;
   color: var(--success-bright);
 }
 
@@ -1228,7 +1400,7 @@ input:focus {
 }
 
 .strike-btn {
-  background: var(--danger);
+  background: var(--primary);
   color: #fff;
   font-weight: 700;
   padding: 0 var(--space-5);
@@ -1716,7 +1888,7 @@ input:focus {
 }
 
 .strike-submit-btn {
-  background: var(--danger);
+  background: var(--primary);
   color: #fff;
   font-weight: 700;
   white-space: nowrap;
@@ -1771,8 +1943,9 @@ input:focus {
 }
 
 .strike-competitor-name {
+  font-family: var(--font-display);
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 1.0625rem;
   margin-top: 2px;
 }
 
@@ -2027,8 +2200,10 @@ input:focus {
 }
 
 .modal-title {
+  font-family: var(--font-display);
   margin: 0;
-  font-size: 1.1rem;
+  font-size: 1.25rem;
+  font-weight: 600;
   color: var(--ink);
   line-height: 1.4;
 }
@@ -2134,7 +2309,21 @@ input:focus {
 
 .tool-choice-primary {
   border-color: var(--primary);
-  background: var(--primary-glow);
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dim) 100%);
+}
+
+.tool-choice-primary .tool-choice-icon {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.tool-choice-primary .tool-choice-title,
+.tool-choice-primary .tool-choice-arrow {
+  color: #fff;
+}
+
+.tool-choice-primary .tool-choice-desc {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .tool-choice-icon {
@@ -2154,7 +2343,8 @@ input:focus {
 }
 
 .tool-choice-title {
-  font-size: 0.9375rem;
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
   font-weight: 700;
   color: var(--ink);
 }
@@ -2244,6 +2434,115 @@ input:focus {
 
 .chain-detail-toggle[open] .chain-detail-summary::after {
   content: ' ↓';
+}
+
+/* ── Press feedback ───────────────────────────────────────────────────────────
+   Every clickable surface confirms it heard you. Placed last so it wins the
+   cascade over each element's own :hover rule (mouse clicks fire both at once).
+   transform-only, so it never fights layout, and it's exempt from :disabled. */
+.btn:not(:disabled):active,
+.chain-hunt-trigger:not(:disabled):active,
+.strike-btn:not(:disabled):active,
+.strike-submit-btn:not(:disabled):active,
+.theme-toggle:active,
+.tool-choice-card:not(:disabled):active,
+.chain-path-tab:active,
+.step-indicator-node[data-state="done"]:active,
+.competitor-card:active,
+.dropdown-btn:active,
+.dropdown-value-item:active,
+.chip-close:active,
+.modal-close-btn:active,
+.location-select:active {
+  transform: scale(0.97);
+  transition-duration: 100ms;
+}
+
+/* ── Hover lift (cards that invite a click but had no motion signal) ─────────── */
+.tool-choice-card:not(:disabled):hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.competitor-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* ── Staggered reveal (chips, timeline steps) ────────────────────────────────
+   Each item's own --stagger-i (set inline per index) offsets its entrance by
+   a small increment so a group arrives as a cascade, not a single flat blink. */
+.chain-filter-chip,
+.chip-item,
+.counter-filter-row {
+  opacity: 0;
+  animation: fadeUp var(--duration-lg) var(--ease-out) forwards;
+  animation-delay: calc(var(--stagger-i, 0) * 45ms);
+}
+
+.chain-step {
+  animation-delay: calc(var(--stagger-i, 0) * 90ms);
+}
+
+/* ── Victory celebration ──────────────────────────────────────────────────────
+   The one genuinely rare, worth-celebrating moment in this tool -- reaching
+   L1. Everything else in the app stays quiet on purpose; this earns motion. */
+@keyframes victoryIn {
+  0%   { opacity: 0; transform: scale(0.92) translateY(8px); }
+  60%  { opacity: 1; transform: scale(1.015) translateY(0); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes victoryGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.35); }
+  50%      { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); }
+}
+
+.chain-victory-card[data-status="WIN"] {
+  animation: victoryIn 550ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.chain-node-victory {
+  animation: victoryIn 550ms cubic-bezier(0.23, 1, 0.32, 1) both,
+             victoryGlow 2200ms ease-out 550ms 2;
+}
+
+.confetti-burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--confetti-color, var(--primary));
+  opacity: 0;
+  animation: confettiFly 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--stagger-i, 0) * 30ms);
+}
+
+@keyframes confettiFly {
+  0%   { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+  100% {
+    opacity: 0;
+    transform:
+      translate(var(--confetti-x, 0px), var(--confetti-y, -60px))
+      rotate(var(--confetti-r, 180deg));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chain-victory-card[data-status="WIN"],
+  .chain-node-victory,
+  .confetti-piece {
+    animation: none !important;
+  }
 }
 
 

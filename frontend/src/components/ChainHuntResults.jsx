@@ -1,3 +1,34 @@
+import {
+  Lightning,
+  CheckCircle,
+  Warning,
+  XCircle,
+  Prohibit,
+  Lightbulb,
+  ArrowClockwise,
+  MagnifyingGlass,
+  Trophy,
+  Star,
+  Target,
+} from "@phosphor-icons/react";
+
+// Fixed spread (not randomized per render) so the burst is stable and doesn't
+// jitter if the component re-renders while the animation is still playing.
+const CONFETTI = [
+  { x: -70, y: -55, r: -120, color: "var(--success)" },
+  { x: -50, y: -75, r: 200, color: "var(--primary)" },
+  { x: -25, y: -85, r: -80, color: "var(--amber)" },
+  { x: 0, y: -90, r: 160, color: "var(--success-bright)" },
+  { x: 25, y: -85, r: -200, color: "var(--primary-bright)" },
+  { x: 50, y: -75, r: 90, color: "var(--amber-bright)" },
+  { x: 70, y: -55, r: -160, color: "var(--success)" },
+  { x: -40, y: -30, r: 220, color: "var(--primary)" },
+  { x: 40, y: -30, r: -140, color: "var(--amber)" },
+  { x: -85, y: -20, r: 100, color: "var(--success-bright)" },
+  { x: 85, y: -20, r: -100, color: "var(--primary-bright)" },
+  { x: 0, y: -40, r: 300, color: "var(--amber-bright)" },
+];
+
 export default function ChainHuntResults({
   chainStatus,
   chainResults,
@@ -17,11 +48,12 @@ export default function ChainHuntResults({
         {chainStatus === "loading" && (
           <div className="chain-loading">
             <span className="spin spin-amber" />
-            <div className="chain-loading-title">⚡ Sequential L1 Chain Hunt Running...</div>
+            <div className="chain-loading-title">
+              <Lightning size={16} weight="fill" className="inline-icon" /> Hunting Your L1 Path
+            </div>
             <div className="chain-loading-sub">
-              Iteratively eliminating each L1 blocker one-by-one.
-              Re-scraping the market after every filter change.
-              This may take 2–5 minutes.
+              Eliminating blockers one by one, re-scraping the market after every
+              filter change. Two to five minutes, worth the wait.
             </div>
             <div className="chain-loading-bar">
               <div className="chain-loading-fill" />
@@ -43,7 +75,7 @@ export default function ChainHuntResults({
         {chainStatus === "done" && chainResults && (
           <>
             <div className="text-xs-subtle margin-bottom-16">
-              ⚡ Sequential Chain Elimination
+              <Lightning size={13} weight="fill" className="inline-icon" /> Sequential Chain Elimination
             </div>
 
             {(() => {
@@ -54,26 +86,26 @@ export default function ChainHuntResults({
                 : null;
 
               const headlineTone = isWin ? "success" : hasPaths ? "amber" : "danger";
-              const headlineIcon = isWin ? "✓" : hasPaths ? "⚠" : "✗";
+              const HeadlineIcon = isWin ? CheckCircle : hasPaths ? Warning : XCircle;
               const headlineText = isWin
-                ? "You can be L1 for this category."
+                ? "You can take L1 in this category."
                 : hasPaths
-                ? `Best floor reachable: ₹${(chainResults.bestAchievablePrice ?? 0).toLocaleString()} — above your price of ₹${priceNum.toLocaleString()}.`
-                : `No path found — all golden filters exhausted at ₹${priceNum.toLocaleString()}.`;
+                ? `Closest floor: ₹${(chainResults.bestAchievablePrice ?? 0).toLocaleString()}. Still above your ₹${priceNum.toLocaleString()}.`
+                : `No path to L1 at ₹${priceNum.toLocaleString()}. Every golden filter's been tried.`;
 
               return (
                 <>
                   <div className={`chain-headline chain-headline-${headlineTone}`}>
-                    <span className="chain-headline-icon">{headlineIcon}</span>
+                    <span className="chain-headline-icon"><HeadlineIcon size={18} weight="fill" /></span>
                     <span>{headlineText}</span>
                   </div>
 
                   {selectedPath && (
                     <div className="chain-active-filters margin-top-12">
-                      {Object.entries(selectedPath.activeFilters || {}).map(([key, val]) => {
+                      {Object.entries(selectedPath.activeFilters || {}).map(([key, val], idx) => {
                         const gf = scrapedData?.filters?.find(f => f.filterKey === key);
                         return (
-                          <div key={key} className="chain-filter-chip">
+                          <div key={key} className="chain-filter-chip" style={{ "--stagger-i": idx }}>
                             {gf?.filterName || key}: <strong>{val}</strong>
                           </div>
                         );
@@ -93,7 +125,7 @@ export default function ChainHuntResults({
                           <span className="chain-path-badge">
                             {path.iterations?.length ?? 0} step{(path.iterations?.length ?? 0) !== 1 ? "s" : ""}
                           </span>
-                          {path.isUntapped && <span className="color-amber text-xs">★</span>}
+                          {path.isUntapped && <span className="color-amber text-xs"><Star size={11} weight="fill" /></span>}
                         </button>
                       ))}
                     </div>
@@ -118,7 +150,11 @@ export default function ChainHuntResults({
                         </div>
                         <div className="chain-stat">
                           <div className={chainResults.status === "WIN" ? "chain-stat-val color-success" : "chain-stat-val color-amber"}>
-                            {chainResults.status === "WIN" ? "✓ WIN" : "⚠ PARTIAL"}
+                            {chainResults.status === "WIN" ? (
+                              <><CheckCircle size={16} weight="fill" className="inline-icon" /> WIN</>
+                            ) : (
+                              <><Warning size={16} weight="fill" className="inline-icon" /> PARTIAL</>
+                            )}
                           </div>
                           <div className="chain-stat-lbl">Status</div>
                         </div>
@@ -127,13 +163,13 @@ export default function ChainHuntResults({
                       {!isWin && (
                         <div className="stuck-banner">
                           <div className="stuck-banner-header">
-                            <div className="stuck-banner-icon">🚫</div>
+                            <div className="stuck-banner-icon"><Prohibit size={20} weight="fill" /></div>
                             <div>
                               <div className="stuck-banner-title">
                                 No Path to L1 at ₹{priceNum.toLocaleString()}
                               </div>
                               <div className="stuck-banner-desc">
-                                All golden filters exhausted — no combination can make your product the cheapest.
+                                Every combination's been tried. None gets you under the floor.
                               </div>
                             </div>
                           </div>
@@ -159,12 +195,13 @@ export default function ChainHuntResults({
 
                           {chainResults.bestAchievablePrice && (
                             <div className="stuck-advice">
-                              <span>💡</span>
+                              <span><Lightbulb size={16} weight="fill" /></span>
                               <span>
-                                To become L1 in this category, you would need to list your product
-                                below <strong className="color-amber">
+                                List below{" "}
+                                <strong className="color-amber">
                                   ₹{chainResults.bestAchievablePrice.toLocaleString()}
-                                </strong> (the highest price floor achievable through spec filters).
+                                </strong>{" "}
+                                to take L1. That's the lowest floor filters can reach.
                               </span>
                             </div>
                           )}
@@ -173,18 +210,20 @@ export default function ChainHuntResults({
 
                       <div className="chain-timeline">
                         {(selectedPath?.iterations || []).map((step, idx) => (
-                          <div key={idx} className="chain-step">
+                          <div key={idx} className="chain-step" style={{ "--stagger-i": idx }}>
                             <div className="chain-node chain-node-blocker">{idx + 1}</div>
                             <div className="chain-blocker-card">
                               <div className="chain-blocker-header">
-                                <div className="chain-blocker-tag">⛔ Competitors at Floor Price</div>
+                                <div className="chain-blocker-tag">
+                                  <Prohibit size={13} weight="bold" className="inline-icon" /> Competitors at Floor Price
+                                </div>
                                 <div className="chain-blocker-price">₹{step.prevMinPrice?.toLocaleString()}</div>
                               </div>
                               <div className="chain-blocker-name">
                                 Current market minimum price
                               </div>
                               <div className="chain-filter-action">
-                                <div className="chain-filter-icon">🎯</div>
+                                <div className="chain-filter-icon"><Target size={14} weight="fill" /></div>
                                 <div className="chain-filter-text">
                                   Apply <strong>"{step.filterApplied?.filterName}"</strong> = <strong>"{step.filterApplied?.value}"</strong>
                                 </div>
@@ -204,7 +243,7 @@ export default function ChainHuntResults({
                               )}
                               {step.result === "UNTAPPED" && (
                                 <div className="chain-new-l1 color-amber">
-                                  → Niche is now <strong>untapped</strong> — zero competitors!
+                                  → Niche is now <strong>untapped</strong>. Zero competitors!
                                 </div>
                               )}
                             </div>
@@ -214,36 +253,55 @@ export default function ChainHuntResults({
                         {selectedPath && (
                           <div className="chain-step chain-step-final">
                             <div className={`chain-node ${selectedPath.isUntapped ? "chain-node-untapped" : selectedPath.status === "PARTIAL" ? "chain-node-partial" : "chain-node-victory"}`}>
-                              {selectedPath.status === "PARTIAL" ? "⚠" : "✓"}
+                              {selectedPath.status === "PARTIAL" ? <Warning size={13} weight="bold" /> : <CheckCircle size={13} weight="bold" />}
                             </div>
                             <div className="chain-victory-card" data-status={selectedPath.status === "PARTIAL" ? "PARTIAL" : "WIN"}>
+                              {selectedPath.status !== "PARTIAL" && (
+                                <div className="confetti-burst">
+                                  {CONFETTI.map((c, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="confetti-piece"
+                                      style={{
+                                        "--stagger-i": idx,
+                                        "--confetti-x": `${c.x}px`,
+                                        "--confetti-y": `${c.y}px`,
+                                        "--confetti-r": `${c.r}deg`,
+                                        "--confetti-color": c.color,
+                                      }}
+                                    />
+                                  ))}
+                                </div>
+                              )}
                               <div className="chain-victory-header">
                                 <div className="chain-victory-tag">
-                                  {selectedPath.isUntapped
-                                    ? "🏆 Untapped Niche"
-                                    : selectedPath.status === "PARTIAL"
-                                        ? "⚠ Stuck - Cannot Reach Target"
-                                        : "🏆 You Are L1!"}
+                                  {selectedPath.isUntapped ? (
+                                    <><Trophy size={16} weight="fill" className="inline-icon" /> Untapped Niche</>
+                                  ) : selectedPath.status === "PARTIAL" ? (
+                                    <><Warning size={16} weight="fill" className="inline-icon" /> Stuck. Can't Reach Target</>
+                                  ) : (
+                                    <><Trophy size={16} weight="fill" className="inline-icon" /> You Are L1!</>
+                                  )}
                                 </div>
                                 <div className="chain-victory-price">
                                   {selectedPath.isUntapped
                                     ? "No Competitors"
-                                    : `Max Price Reached: ₹${selectedPath.nicheMinPrice?.toLocaleString() ?? "?"}`}
+                                    : `Ceiling Price: ₹${selectedPath.nicheMinPrice?.toLocaleString() ?? "?"}`}
                                 </div>
                               </div>
                               <div className="chain-victory-detail">
                                 {selectedPath.status === "PARTIAL" ? (
                                   <>
-                                    After <strong>{(selectedPath.iterations || []).length} elimination{(selectedPath.iterations || []).length !== 1 ? "s" : ""}</strong>,
-                                    the highest price floor reachable is <strong>₹{selectedPath.nicheMinPrice?.toLocaleString() ?? "?"}</strong>.
-                                    No further filters can raise the price above your target of <strong>₹{priceNum.toLocaleString()}</strong>.
+                                    <strong>{(selectedPath.iterations || []).length} elimination{(selectedPath.iterations || []).length !== 1 ? "s" : ""}</strong> in,
+                                    the highest floor reachable is <strong>₹{selectedPath.nicheMinPrice?.toLocaleString() ?? "?"}</strong>.
+                                    No filter combination clears your target of <strong>₹{priceNum.toLocaleString()}</strong>.
                                   </>
                                 ) : (
                                   <>
-                                    After <strong>{(selectedPath.iterations || []).length} elimination{(selectedPath.iterations || []).length !== 1 ? "s" : ""}</strong>,
-                                    your product at <strong>₹{priceNum.toLocaleString()}</strong> is now the cheapest.
+                                    <strong>{(selectedPath.iterations || []).length} elimination{(selectedPath.iterations || []).length !== 1 ? "s" : ""}</strong> in,
+                                    your <strong>₹{priceNum.toLocaleString()}</strong> is now the cheapest.
                                     {!selectedPath.isUntapped && selectedPath.nicheMinPrice && (
-                                      <> Price gap: <strong>₹{(selectedPath.nicheMinPrice - priceNum).toLocaleString()}</strong></>
+                                      <> Gap: <strong>₹{(selectedPath.nicheMinPrice - priceNum).toLocaleString()}</strong></>
                                     )}
                                     {selectedPath.totalProducts > 0 && (
                                       <> · <strong>{selectedPath.totalProducts}</strong> products in niche</>
@@ -255,7 +313,7 @@ export default function ChainHuntResults({
                               {selectedPath.competitorInsights && (
                                 <div className="competitor-insights-container">
                                   <div className="competitor-insights-header">
-                                    <span className="competitor-insights-icon">🕵️</span>
+                                    <span className="competitor-insights-icon"><MagnifyingGlass size={16} weight="bold" /></span>
                                     <span className="competitor-insights-title">Competitor Insights</span>
                                   </div>
                                   <div className="competitor-insights-msg">
@@ -323,7 +381,7 @@ export default function ChainHuntResults({
             })()}
 
             <button className="chain-hunt-trigger margin-top-24" onClick={onChainHunt}>
-              🔄 Re-run Chain Hunt
+              <ArrowClockwise size={16} weight="bold" /> Re-run Chain Hunt
             </button>
           </>
         )}

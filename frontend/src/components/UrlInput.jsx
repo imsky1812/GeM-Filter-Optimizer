@@ -1,3 +1,5 @@
+import { CaretDown, CheckCircle, MapPin, ArrowRight } from "@phosphor-icons/react";
+
 export default function UrlInput({
   gemUrl,
   setGemUrl,
@@ -14,9 +16,9 @@ export default function UrlInput({
       <div className="card-hdr">
         <div className="step-num">01</div>
         <div>
-          <div className="card-title">GeM Category URL</div>
+          <div className="card-title">Category URL</div>
           <div className="card-desc">
-            Paste a category listing URL from mkp.gem.gov.in
+            Drop in a category link from mkp.gem.gov.in.
           </div>
         </div>
       </div>
@@ -40,7 +42,7 @@ export default function UrlInput({
               <option key={i} value={loc}>{loc}</option>
             ))}
           </select>
-          <span className="select-arrow">▼</span>
+          <span className="select-arrow"><CaretDown size={12} weight="bold" /></span>
         </div>
         <button
           className="btn btn-primary"
@@ -51,35 +53,32 @@ export default function UrlInput({
           {scrapeStatus === "loading" ? (
             <>
               <span className="spin" />
-              Scraping...
+              Scanning...
             </>
           ) : (
-            "Scrape →"
+            <>Scan Category <ArrowRight size={15} weight="bold" /></>
           )}
         </button>
       </div>
       {scrapeStatus === "loading" && (
         <div className="loading">
           <span className="spin spin-muted" />
-          Initializing Category · Extracting Golden Filters...
+          Reading the category · pulling golden filters
           <br />
           <span className="card-desc">
-            Fetching base definitions from GeM
+            Fetching live data from GeM
           </span>
         </div>
       )}
       {scrapeError && <div className="err-box">{scrapeError}</div>}
       {scrapeStatus === "done" && scrapedData && (
         <div className="info-box">
-          ✓ Initialized Category: Found{" "}
-          <strong>{scrapedData.filters.length} Golden Filters</strong>
+          <CheckCircle size={14} weight="fill" className="inline-icon" />{" "}
+          <strong>{scrapedData.filters.length} golden filters</strong> found across{" "}
+          <strong>{scrapedData.totalResults.toLocaleString()} products</strong>
           {scrapedData.location && scrapedData.location !== "All India" && (
-            <span className="loc-badge">📍 {scrapedData.location}</span>
+            <span className="loc-badge"><MapPin size={11} weight="fill" /> {scrapedData.location}</span>
           )}
-          <span>
-            {" "}
-            ({scrapedData.totalResults.toLocaleString()} total products available in category)
-          </span>
         </div>
       )}
     </div>

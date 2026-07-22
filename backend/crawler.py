@@ -663,7 +663,19 @@ class GeMCrawler:
             text = await page.content()
             json_match = re.search(r'(\{.*\})', text, re.DOTALL)
             if not json_match:
-                return {"min_price": None, "total": 0, "product_count": 0, "seller_count": 0}
+                # A WAF block page, login redirect, or captcha interstitial also
+                # fails this parse -- that is NOT the same thing as GeM telling us
+                # the niche is genuinely empty. Callers (chain_hunt's mismatch
+                # guard) rely on `error` to tell "0 real results" apart from
+                # "couldn't even read a response"; conflating them here is what
+                # made every blocked verification masquerade as a confirmed
+                # untapped niche and get silently discarded downstream.
+                logger.warning(
+                    f"[Crawler] Filtered-price response wasn't JSON for {api_url} "
+                    f"-- treating as a failed verification, not a real 0. "
+                    f"First 200 chars: {text[:200]!r}"
+                )
+                return {"min_price": None, "total": 0, "product_count": 0, "seller_count": 0, "error": True}
 
             data = json.loads(json_match.group(1))
             total = data.get("number_of_results", 0)

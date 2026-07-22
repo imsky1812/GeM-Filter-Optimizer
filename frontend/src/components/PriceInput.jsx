@@ -1,3 +1,5 @@
+import { X, CaretUp, CaretDown, CaretRight, Check, ArrowRight } from "@phosphor-icons/react";
+
 export default function PriceInput({
   sellerPrice,
   setSellerPrice,
@@ -16,9 +18,9 @@ export default function PriceInput({
     <div className="card fade-in fade-in-d1 relative-z-50">
       <div className="card-hdr">
         <div>
-          <div className="card-title">Your Product Price</div>
+          <div className="card-title">Your Price</div>
           <div className="card-desc">
-            Enter your price, then continue to choose an analysis.
+            What are you selling at? We'll find your path to L1.
           </div>
         </div>
       </div>
@@ -36,7 +38,7 @@ export default function PriceInput({
         {priceNum > 0 && (
           <div className="flex-gap-12-ml-auto">
             <button className="chain-hunt-trigger" onClick={onContinue}>
-              Find my L1 path →
+              Find my L1 path <ArrowRight size={16} weight="bold" />
             </button>
           </div>
         )}
@@ -45,24 +47,24 @@ export default function PriceInput({
       {/* Mandatory Filters Section */}
       <details className="mandatory-filters-section mandatory-section">
         <summary className="mandatory-title">
-          Advanced: required specs
+          Lock in required specs
         </summary>
         <div className="mandatory-desc">
-          Select any specific features the buyer absolutely requires. The deep search will start from these filters and find the remaining golden filters needed for L1.
+          Specs the buyer won't budge on. We'll build the rest of the path to L1 around them.
         </div>
 
         {/* Selected Filters Chips */}
         {mandatoryFilters.length > 0 && (
           <div className="chips-container">
             {mandatoryFilters.map((mf, idx) => (
-              <div key={idx} className="chip-item">
+              <div key={idx} className="chip-item" style={{ "--stagger-i": idx }}>
                 <span className="chip-label">{mf.filterName}:</span>
                 <strong className="chip-value">{mf.value}</strong>
                 <button
                   onClick={() => setMandatoryFilters(prev => prev.filter((_, i) => i !== idx))}
                   className="chip-close"
                 >
-                  ✕
+                  <X size={11} weight="bold" />
                 </button>
               </div>
             ))}
@@ -78,7 +80,7 @@ export default function PriceInput({
           >
             + Add Required Spec{" "}
             <span className="dropdown-caret">
-              {isFilterDropdownOpen ? "▲" : "▼"}
+              {isFilterDropdownOpen ? <CaretUp size={12} weight="bold" /> : <CaretDown size={12} weight="bold" />}
             </span>
           </button>
 
@@ -98,11 +100,11 @@ export default function PriceInput({
                         <span className="dropdown-item-title">
                           {filter.filterName}
                         </span>
-                        <span 
-                          className="dropdown-chevron-icon" 
+                        <span
+                          className="dropdown-chevron-icon"
                           data-active={isHovered ? "true" : "false"}
                         >
-                          ▶
+                          <CaretRight size={12} weight="bold" />
                         </span>
                       </div>
 
@@ -133,7 +135,7 @@ export default function PriceInput({
                                 data-selected={isSelected ? "true" : "false"}
                               >
                                 <span>{val}</span>
-                                {isSelected && <span className="selected-check">✓</span>}
+                                {isSelected && <span className="selected-check"><Check size={13} weight="bold" /></span>}
                               </div>
                             );
                           })}

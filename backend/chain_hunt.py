@@ -500,10 +500,21 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         return active_dict, steps_list, local_eval, live_res
 
     logger.info(f"[IMCDS] Verifying {len(candidates)} candidate paths live...")
-    
+
+    # A burst of near-simultaneous filtered-price requests reliably trips GeM's
+    # WAF (confirmed via logged "Request Rejected" responses -- every candidate
+    # in a batch gets blocked, not genuinely answered). Keep true concurrency
+    # low and stagger submissions so requests land spread out in time instead
+    # of landing on GeM within the same second.
+    VERIFY_MAX_WORKERS = 2
+    VERIFY_STAGGER_SECONDS = 0.6
+
     if candidates:
-        with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as executor:
-            futures = [executor.submit(verify_candidate, c) for c in candidates]
+        with ThreadPoolExecutor(max_workers=min(VERIFY_MAX_WORKERS, len(candidates))) as executor:
+            futures = []
+            for c in candidates:
+                futures.append(executor.submit(verify_candidate, c))
+                time.sleep(VERIFY_STAGGER_SECONDS)
             for future in as_completed(futures):
                 api_calls[0] += 1
                 try:

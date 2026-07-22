@@ -1,3 +1,5 @@
+import { Check } from "@phosphor-icons/react";
+
 const STEPS = [
   { id: 1, label: "Category" },
   { id: 2, label: "Price" },
@@ -23,7 +25,7 @@ export default function StepIndicator({ currentStep, furthestStep, onStepClick }
               onClick={() => isClickable && onStepClick(step.id)}
               disabled={!isClickable}
             >
-              {isCompleted ? "✓" : step.id}
+              {isCompleted ? <Check size={14} weight="bold" /> : step.id}
             </button>
             <span className="step-indicator-label" data-state={state}>
               {step.label}

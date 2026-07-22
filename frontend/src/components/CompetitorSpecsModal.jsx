@@ -1,3 +1,5 @@
+import { X, Warning, Star, ArrowSquareOut } from "@phosphor-icons/react";
+
 export default function CompetitorSpecsModal({
   selectedCompetitor,
   setSelectedCompetitor,
@@ -28,11 +30,11 @@ export default function CompetitorSpecsModal({
               </span>
             </div>
           </div>
-          <button 
+          <button
             onClick={() => setSelectedCompetitor(null)}
             className="modal-close-btn"
           >
-            ×
+            <X size={16} weight="bold" />
           </button>
         </div>
         
@@ -40,17 +42,17 @@ export default function CompetitorSpecsModal({
           {isFetchingSpecs ? (
             <div className="modal-loading">
               <div className="spin spin-muted" />
-              <div>Scraping live specifications...</div>
+              <div>Pulling live specs...</div>
             </div>
           ) : competitorSpecsError ? (
             <div className="err-box">
-              ⚠️ {competitorSpecsError}
+              <Warning size={14} weight="fill" className="inline-icon" /> {competitorSpecsError}
             </div>
           ) : competitorSpecs && Object.keys(competitorSpecs).length > 0 ? (
             <div>
               <div className="modal-info-row">
                 <span className="modal-info-dot"></span>
-                Only showing the Golden Filters used by this competitor
+                Golden filters only. Everything that matters.
               </div>
               <div className="flex-column-gap-8">
                 {Object.entries(competitorSpecs)
@@ -67,7 +69,7 @@ export default function CompetitorSpecsModal({
                           className="spec-name"
                           data-golden={isGolden ? "true" : "false"}
                         >
-                          {key} {isGolden && "⭐"}
+                          {key} {isGolden && <Star size={11} weight="fill" className="inline-icon" />}
                         </div>
                         <div className="spec-value">
                           {value}
@@ -91,7 +93,7 @@ export default function CompetitorSpecsModal({
               rel="noopener noreferrer"
               className="modal-footer-link"
             >
-              View on GeM ↗
+              View on GeM <ArrowSquareOut size={13} weight="bold" className="inline-icon" />
             </a>
           </div>
         )}

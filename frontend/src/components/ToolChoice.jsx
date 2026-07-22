@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Lightning, Target, ArrowRight } from "@phosphor-icons/react";
 import SurgicalStrike from "./SurgicalStrike.jsx";
 
 export default function ToolChoice({
@@ -19,9 +20,9 @@ export default function ToolChoice({
     <div className="card fade-in">
       <div className="card-hdr">
         <div>
-          <div className="card-title">Choose an analysis</div>
+          <div className="card-title">Choose Your Move</div>
           <div className="card-desc">
-            Pick what you want to find out about this category
+            What do you want to know about this category?
           </div>
         </div>
       </div>
@@ -32,14 +33,14 @@ export default function ToolChoice({
         onClick={onChooseChainHunt}
         disabled={chainStatus === "loading"}
       >
-        <div className="tool-choice-icon">⚡</div>
+        <div className="tool-choice-icon"><Lightning size={22} weight="fill" /></div>
         <div className="tool-choice-body">
           <div className="tool-choice-title">Sequential Chain Hunt</div>
           <div className="tool-choice-desc">
-            Find filter combinations that make your product the cheapest (L1) in this category.
+            Stack filters until you're the cheapest listing in this category.
           </div>
         </div>
-        <div className="tool-choice-arrow">→</div>
+        <div className="tool-choice-arrow"><ArrowRight size={18} weight="bold" /></div>
       </button>
 
       {!strikeExpanded ? (
@@ -48,14 +49,14 @@ export default function ToolChoice({
           className="tool-choice-card tool-choice-secondary"
           onClick={() => setStrikeExpanded(true)}
         >
-          <div className="tool-choice-icon">🎯</div>
+          <div className="tool-choice-icon"><Target size={20} weight="fill" /></div>
           <div className="tool-choice-body">
-            <div className="tool-choice-title">Analyze a specific competitor</div>
+            <div className="tool-choice-title">Target a Competitor</div>
             <div className="tool-choice-desc">
-              Paste a competitor's product URL to find filters that exclude them.
+              Paste their listing. We'll find the filters that box them out.
             </div>
           </div>
-          <div className="tool-choice-arrow">→</div>
+          <div className="tool-choice-arrow"><ArrowRight size={18} weight="bold" /></div>
         </button>
       ) : (
         <SurgicalStrike

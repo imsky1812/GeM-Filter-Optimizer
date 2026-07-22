@@ -1,3 +1,5 @@
+import { Target, ArrowClockwise, CheckCircle, Star, ArrowRight, Warning, Trophy } from "@phosphor-icons/react";
+
 export default function SurgicalStrike({
   strikeUrl,
   setStrikeUrl,
@@ -11,11 +13,11 @@ export default function SurgicalStrike({
   return (
     <div className="card fade-in fade-in-d2">
       <div className="card-hdr">
-        <div className="step-num step-num-strike">🎯</div>
+        <div className="step-num step-num-strike"><Target size={16} weight="fill" /></div>
         <div>
           <div className="card-title">Surgical Strike</div>
           <div className="card-desc">
-            Target a specific competitor — paste their product URL to find which golden filters can exclude them
+            Paste a competitor's listing. We'll find the golden filters that box them out.
           </div>
         </div>
       </div>
@@ -40,7 +42,7 @@ export default function SurgicalStrike({
               <span className="spin" /> Analyzing...
             </>
           ) : (
-            "🎯 Analyze Competitor"
+            <><Target size={16} weight="bold" /> Analyze Competitor</>
           )}
         </button>
       </div>
@@ -101,11 +103,11 @@ export default function SurgicalStrike({
           {strikeResults.goldenMatches?.length > 0 && (
             <div className="margin-bottom-16">
               <div className="section-sub-header">
-                Competitor's Golden Filter Specs:
+                Their Golden Specs
               </div>
               <div className="chips-container">
                 {strikeResults.goldenMatches.map((m, idx) => (
-                  <div key={idx} className="chip-item chip-item-amber">
+                  <div key={idx} className="chip-item chip-item-amber" style={{ "--stagger-i": idx }}>
                     <span className="chip-label">{m.filterName}:</span>{" "}
                     <strong className="chip-value">{m.competitorValue}</strong>
                   </div>
@@ -127,13 +129,20 @@ export default function SurgicalStrike({
                     className="counter-filter-row"
                     data-win={cf.wouldWin ? "true" : "false"}
                     data-untapped={cf.isUntapped ? "true" : "false"}
+                    style={{ "--stagger-i": idx }}
                   >
                     <div
                       className="counter-icon"
                       data-win={cf.wouldWin ? "true" : "false"}
                       data-untapped={cf.isUntapped ? "true" : "false"}
                     >
-                      {cf.wouldWin ? "✅" : cf.isUntapped ? "★" : "→"}
+                      {cf.wouldWin ? (
+                        <CheckCircle size={16} weight="fill" />
+                      ) : cf.isUntapped ? (
+                        <Star size={16} weight="fill" />
+                      ) : (
+                        <ArrowRight size={14} weight="bold" />
+                      )}
                     </div>
                     <div className="counter-info">
                       <div className="counter-info-main">
@@ -143,11 +152,13 @@ export default function SurgicalStrike({
                         </span>
                       </div>
                       <div className="counter-info-sub">
-                        {cf.isUntapped
-                          ? "🏆 Zero competitors — untapped niche!"
-                          : cf.wouldWin
-                          ? `🏆 You'd be L1! Min price: ₹${cf.resultMinPrice?.toLocaleString()}, ${cf.resultTotal} products`
-                          : `Min price: ₹${cf.resultMinPrice?.toLocaleString() ?? "?"}, ${cf.resultTotal} products`}
+                        {cf.isUntapped ? (
+                          <><Trophy size={13} weight="fill" className="inline-icon" /> Zero competitors. Untapped niche!</>
+                        ) : cf.wouldWin ? (
+                          <><Trophy size={13} weight="fill" className="inline-icon" /> You'd be L1! Min price: ₹{cf.resultMinPrice?.toLocaleString()}, {cf.resultTotal} products</>
+                        ) : (
+                          `Min price: ₹${cf.resultMinPrice?.toLocaleString() ?? "?"}, ${cf.resultTotal} products`
+                        )}
                       </div>
                     </div>
                     <div className={`counter-badge ${cf.wouldWin ? "counter-badge-win" : cf.isUntapped ? "counter-badge-untapped" : "counter-badge-no"}`}>
@@ -159,19 +170,19 @@ export default function SurgicalStrike({
             </>
           ) : strikeResults.goldenMatches?.length === 0 ? (
             <div className="empty margin-top-16">
-              <div className="empty-icon">⚠️</div>
+              <div className="empty-icon"><Warning size={28} weight="fill" /></div>
               <div className="empty-text">
-                Could not match any of the competitor's specs to golden filters.<br />
+                No spec matches found.<br />
                 <span className="empty-subtext">
-                  The product page may have different spec names than the category filters.
+                  Their listing likely uses different spec names than this category's filters.
                 </span>
               </div>
             </div>
           ) : (
             <div className="empty margin-top-16">
-              <div className="empty-icon">🎯</div>
+              <div className="empty-icon"><Target size={28} weight="fill" /></div>
               <div className="empty-text">
-                No counter filters available — the competitor matches all golden filter values.
+                They match every golden filter. No counter-move available.
               </div>
             </div>
           )}
@@ -180,7 +191,7 @@ export default function SurgicalStrike({
             className="strike-btn margin-top-24"
             onClick={onSurgicalStrike}
           >
-            🔄 Re-analyze
+            <ArrowClockwise size={16} weight="bold" /> Re-analyze
           </button>
         </div>
       )}
