@@ -578,18 +578,26 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     # Process verified candidates
     winning_candidates = []
     partial_candidates = []
-    
+    unconfirmed_candidates = []
+
     for active_dict, steps_list, local_eval, live_res in verified_paths:
         total = live_res["total"]
         min_price = live_res["min_price"]
         sellers = live_res["seller_count"]
-        
+
         is_untapped = (total == 0)
-        
-        # Mismatch guard: if the live API returns 0 results, but our in-memory database has matching products,
-        # it means the live query is broken or mismatched on the search index, so it is a fake untapped niche.
+
+        # Mismatch guard: if the live API returns 0 results, but our in-memory database has matching
+        # products, the live query for this specific combo isn't corroborating our local data -- most
+        # often because GeM's search index doesn't accept the literal spec text we're sending for some
+        # facet types (confirmed live: multi-word text facets like "Seat upholstery material" or
+        # "Ports" return 0 live even with correct encoding, while local data -- scraped from real
+        # product pages -- shows genuine matches). We can't tell "real GeM 0" apart from "GeM doesn't
+        # recognize this filter value" per-facet, so rather than silently discarding a strong local
+        # candidate as fake, surface it as unconfirmed instead of throwing it away.
         if is_untapped and local_eval["total"] > 0:
-            logger.warning(f"[IMCDS] Mismatch detected: live total=0 but local total={local_eval['total']} for path {steps_list}. Discarding fake untapped niche.")
+            logger.warning(f"[IMCDS] Mismatch detected: live total=0 but local total={local_eval['total']} for path {steps_list}. Marking unconfirmed instead of discarding.")
+            unconfirmed_candidates.append((active_dict, steps_list, local_eval))
             continue
             
         is_l1_win = (total > 0 and (min_price is None or min_price > target_price) and sellers >= min_sellers_limit)
@@ -721,19 +729,72 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 "competitorInsights": extract_competitor_insights(live_res["products"], target_price)
             })
 
+    # Format unconfirmed candidates (mismatch-guarded: strong locally, live query
+    # didn't corroborate). Always surfaced alongside whatever real result we have --
+    # even next to a confirmed win, these are extra leads worth a manual check.
+    formatted_unconfirmed = []
+    if unconfirmed_candidates:
+        def sort_unconfirmed_key(item):
+            active_dict, steps_list, local_eval = item
+            return (
+                -(local_eval["min_price"] or 0),  # Higher local price preferred
+                local_eval["total"],               # Fewer remaining products preferred
+                len(steps_list),                   # Shorter path preferred
+            )
+
+        unconfirmed_candidates.sort(key=sort_unconfirmed_key)
+
+        for active_dict, steps_list, local_eval in unconfirmed_candidates[:5]:
+            iterations = []
+            curr_act = {}
+            prev_min = market_min_price
+            for idx, (gf, val) in enumerate(steps_list):
+                curr_act[gf["filterKey"]] = val
+                step_eval = evaluate_state(curr_act)
+                new_min = step_eval["min_price"]
+                new_total = step_eval["total"]
+                sellers_count = step_eval["sellers"]
+
+                step = {
+                    "iteration": idx + 1,
+                    "prevMinPrice": prev_min,
+                    "filterApplied": {
+                        "filterKey": gf["filterKey"],
+                        "filterName": gf["filterName"],
+                        "value": val,
+                    },
+                    "result": "LATERAL" if (new_min is not None and prev_min is not None and new_min <= prev_min) else "ELIMINATED",
+                    "newMinPrice": new_min,
+                    "newTotal": new_total,
+                    "sellerCount": sellers_count,
+                }
+                iterations.append(step)
+                prev_min = new_min
+
+            formatted_unconfirmed.append({
+                "iterations": iterations,
+                "activeFilters": {**start_filters, **active_dict},
+                "status": "UNCONFIRMED",
+                "nicheMinPrice": local_eval["min_price"],
+                "totalProducts": local_eval["total"],
+                "sellerCount": local_eval.get("sellers", 0),
+                "chainLength": len(active_dict) + len(start_filters),
+            })
+
     elapsed = time.time() - t_start
     status = "WIN" if any(p["status"] == "WIN" for p in formatted_winning) else "PARTIAL"
-    
+
     # Calculate best achievable price
     best_achievable = 0
     for p in formatted_winning:
         mp = p.get("nicheMinPrice") or 0
         if mp > best_achievable:
             best_achievable = mp
-            
+
     return {
         "winningPaths": formatted_winning,
         "totalPaths": len(formatted_winning),
+        "unconfirmedPaths": formatted_unconfirmed,
         "totalApiCalls": api_calls[0],
         "status": status,
         "goldenFilterCount": len(golden_list),

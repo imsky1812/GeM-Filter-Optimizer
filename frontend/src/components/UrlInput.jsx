@@ -14,7 +14,6 @@ export default function UrlInput({
   return (
     <div className="card fade-in">
       <div className="card-hdr">
-        <div className="step-num">01</div>
         <div>
           <div className="card-title">Category URL</div>
           <div className="card-desc">

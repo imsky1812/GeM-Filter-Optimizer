@@ -56,8 +56,11 @@
   --glass-hover:      #1D1D24;
   --glass-active:     #24242C;
 
-  /* Ambient glow behind the hero (dark theme reads best with real depth) */
+  /* Ambient glow behind the hero (dark theme reads best with real depth).
+     Two glows -- top-left primary, a faint bottom-right echo -- so the
+     whole frame feels lit rather than one blob over empty black. */
   --glow-color: rgba(240, 53, 63, 0.20);
+  --glow-color-2: rgba(240, 53, 63, 0.07);
   --grain-opacity: 0.05;
 
   /* Typography */
@@ -83,10 +86,13 @@
   --space-10:  40px;
   --space-12:  48px;
 
-  /* Shadows (flat at rest; only used on hover per component rules) */
-  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.36);
-  --shadow-lg:  0 12px 32px rgba(0, 0, 0, 0.48);
+  /* Shadows (flat at rest; only used on hover per component rules).
+     Tinted toward the surface's own dark-red-black, not pure #000 --
+     a plain black shadow on a near-black background reads as generic. */
+  --shadow-sm:  0 1px 2px rgba(12, 4, 6, 0.4);
+  --shadow-md:  0 4px 18px rgba(14, 5, 7, 0.46);
+  --shadow-lg:  0 16px 40px rgba(10, 3, 5, 0.56);
+  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
   /* Motion */
   --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
@@ -143,11 +149,13 @@
   --glass-active:     #EEEEF1;
 
   --glow-color: rgba(240, 53, 63, 0.06);
+  --glow-color-2: rgba(240, 53, 63, 0.03);
   --grain-opacity: 0.02;
 
-  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.06);
-  --shadow-lg:  0 12px 32px rgba(0, 0, 0, 0.10);
+  --shadow-sm:  0 1px 2px rgba(120, 20, 22, 0.05);
+  --shadow-md:  0 4px 16px rgba(120, 20, 22, 0.07);
+  --shadow-lg:  0 12px 32px rgba(120, 20, 22, 0.12);
+  --card-highlight: inset 0 1px 0 rgba(17, 17, 20, 0.025);
 }
 
 /* ── Base ───────────────────────────────────────────────────────────────────── */
@@ -176,7 +184,9 @@ body::before {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse 900px 520px at 18% -8%, var(--glow-color), transparent 62%);
+  background:
+    radial-gradient(ellipse 900px 520px at 18% -8%, var(--glow-color), transparent 62%),
+    radial-gradient(ellipse 700px 480px at 100% 78%, var(--glow-color-2, transparent), transparent 65%);
   transition: background var(--duration-lg) var(--ease-out);
 }
 
@@ -360,15 +370,14 @@ body::after {
 }
 
 .step-indicator-node {
-  width: 32px;
-  height: 32px;
+  width: 8px;
+  height: 8px;
   flex-shrink: 0;
   border-radius: 50%;
-  border: 1px solid var(--glass-border);
-  background: var(--surface-base);
-  color: var(--ink-subtle);
-  font-size: 0.8125rem;
-  font-weight: 700;
+  border: 1px solid var(--ink-ghost);
+  background: transparent;
+  padding: 0;
+  color: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -377,13 +386,17 @@ body::after {
 }
 
 .step-indicator-node[data-state="current"] {
+  width: 9px;
+  height: 9px;
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  box-shadow: 0 0 0 3px var(--primary-glow);
 }
 
 .step-indicator-node[data-state="done"] {
-  background: var(--success-glow);
+  width: 16px;
+  height: 16px;
+  background: transparent;
   border-color: var(--success);
   color: var(--success);
   cursor: pointer;
@@ -391,16 +404,20 @@ body::after {
 
 .step-indicator-node[data-state="done"]:hover {
   background: var(--success);
-  color: #fff;
+  color: var(--surface-lowest);
 }
 
 .step-indicator-label {
   margin-left: var(--space-2);
   margin-right: var(--space-3);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--ink-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-ghost);
   white-space: nowrap;
+  transition: color var(--duration-md) var(--ease-out);
 }
 
 .step-indicator-label[data-state="current"] {
@@ -408,7 +425,7 @@ body::after {
 }
 
 .step-indicator-label[data-state="done"] {
-  color: var(--success);
+  color: var(--ink-subtle);
 }
 
 .step-indicator-line {
@@ -420,6 +437,7 @@ body::after {
 
 .step-indicator-line[data-state="done"] {
   background: var(--success);
+  opacity: 0.4;
 }
 
 @media (max-width: 640px) {
@@ -435,12 +453,12 @@ body::after {
   border-radius: var(--radius-lg);
   padding: var(--space-6);
   margin-bottom: var(--space-4);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-sm), var(--card-highlight);
   transition: box-shadow var(--duration-md) var(--ease-out);
 }
 
 .card:hover {
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-md), var(--card-highlight);
 }
 
 .card-hdr {
@@ -448,28 +466,6 @@ body::after {
   align-items: center;
   gap: var(--space-3);
   margin-bottom: var(--space-5);
-}
-
-.step-num {
-  font-family: var(--font-display);
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: var(--primary-bright);
-  background: var(--primary-glow);
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  border: 1px solid var(--primary);
-}
-
-.step-num[data-variant="danger"] {
-  color: var(--danger-bright);
-  background: var(--danger-glow);
-  border-color: var(--danger);
 }
 
 .card-title {
@@ -1213,7 +1209,7 @@ input:focus {
 .stuck-banner {
   background: linear-gradient(135deg, var(--danger-glow) 0%, var(--amber-glow) 100%);
   border: 1px solid var(--danger);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: var(--space-5) var(--space-6);
   margin-bottom: var(--space-5);
 }
@@ -1300,6 +1296,39 @@ input:focus {
   color: var(--amber);
 }
 
+/* ── Unconfirmed Leads (mismatch-guarded candidates) ──────────────────────────── */
+.unconfirmed-section {
+  padding: var(--space-4);
+  background: var(--amber-glow);
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+}
+
+.unconfirmed-header {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--amber);
+}
+
+.unconfirmed-desc {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+  line-height: 1.5;
+  margin-top: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.unconfirmed-card {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--glass-border);
+}
+
+.unconfirmed-stats {
+  font-size: 0.75rem;
+  color: var(--ink-subtle);
+  margin-top: var(--space-2);
+}
+
 /* ── Empty State ────────────────────────────────────────────────────────────── */
 .empty {
   text-align: center;
@@ -1319,70 +1348,6 @@ input:focus {
   max-width: 40ch;
   margin-inline: auto;
   text-wrap: balance;
-}
-
-/* ── Modal Overlay ──────────────────────────────────────────────────────────── */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: var(--z-modal);
-  padding: var(--space-4);
-  animation: fadeUp 200ms var(--ease-out);
-}
-
-.modal-content {
-  background: var(--surface-base);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  width: 100%;
-  max-width: 600px;
-  max-height: 90vh;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: var(--shadow-lg);
-}
-
-.modal-header {
-  padding: var(--space-6);
-  border-bottom: 1px solid var(--glass-border);
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.modal-close {
-  background: transparent;
-  border: none;
-  color: var(--ink-muted);
-  cursor: pointer;
-  font-size: 1.5rem;
-  line-height: 1;
-  padding: 0 var(--space-2);
-  transition: color var(--duration-sm);
-}
-
-.modal-close:hover {
-  color: var(--ink);
-}
-
-.modal-body {
-  padding: var(--space-6);
-  overflow-y: auto;
-  flex: 1;
-}
-
-.modal-footer {
-  padding: var(--space-4) var(--space-6);
-  border-top: 1px solid var(--glass-border);
-  background: var(--glass-hover);
 }
 
 /* ── Surgical Strike ────────────────────────────────────────────────────────── */
@@ -1835,14 +1800,6 @@ input:focus {
   background: var(--glass-hover);
 }
 
-.stuck-banner {
-  background: linear-gradient(135deg, var(--danger-glow) 0%, var(--amber-glow) 100%);
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-lg);
-  padding: var(--space-5) var(--space-6);
-  margin-bottom: var(--space-5);
-}
-
 /* ── Custom Additions to eliminate inline styles ── */
 .dropdown-caret {
   margin-left: var(--space-1);
@@ -1862,12 +1819,6 @@ input:focus {
 
 .selected-check {
   font-size: 0.8rem;
-}
-
-.step-num-strike {
-  background: var(--danger) !important;
-  border: none !important;
-  color: #fff !important;
 }
 
 .strike-input-group {

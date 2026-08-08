@@ -13,7 +13,6 @@ export default function SurgicalStrike({
   return (
     <div className="card fade-in fade-in-d2">
       <div className="card-hdr">
-        <div className="step-num step-num-strike"><Target size={16} weight="fill" /></div>
         <div>
           <div className="card-title">Surgical Strike</div>
           <div className="card-desc">

@@ -113,6 +113,41 @@ export default function ChainHuntResults({
                     </div>
                   )}
 
+                  {!hasPaths && chainResults.unconfirmedPaths && chainResults.unconfirmedPaths.length > 0 && (
+                    <div className="unconfirmed-section margin-top-16">
+                      <div className="unconfirmed-header">
+                        <Warning size={14} weight="fill" className="inline-icon" />{" "}
+                        {chainResults.unconfirmedPaths.length} lead{chainResults.unconfirmedPaths.length !== 1 ? "s" : ""} in local data, not confirmed live
+                      </div>
+                      <div className="unconfirmed-desc">
+                        GeM's live search didn't corroborate these combinations, most likely
+                        because it doesn't recognize the literal filter text we're sending for
+                        these spec types (not because the niche doesn't exist). Worth checking
+                        manually on the actual GeM site before ruling them out.
+                      </div>
+                      {chainResults.unconfirmedPaths.map((path, idx) => (
+                        <div key={idx} className="unconfirmed-card">
+                          <div className="chain-active-filters">
+                            {Object.entries(path.activeFilters || {}).map(([key, val]) => {
+                              const gf = scrapedData?.filters?.find(f => f.filterKey === key);
+                              return (
+                                <div key={key} className="chain-filter-chip chip-item-amber">
+                                  {gf?.filterName || key}: <strong>{val}</strong>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="unconfirmed-stats">
+                            Local match: <strong>{path.totalProducts}</strong> product{path.totalProducts !== 1 ? "s" : ""}
+                            {path.nicheMinPrice != null && (
+                              <> · floor ~₹{path.nicheMinPrice.toLocaleString()}</>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {chainResults.winningPaths && chainResults.winningPaths.length > 1 && (
                     <div className="chain-path-tabs margin-top-12">
                       {chainResults.winningPaths.map((path, idx) => (
