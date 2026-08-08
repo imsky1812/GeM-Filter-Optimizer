@@ -1434,13 +1434,18 @@ class GeMScraper:
     def _normalize_filter_value(self, val) -> str:
         """
         Normalize a spec filter value for the GeM search JSON API index.
-        E.g. "Mesh fabrics" -> "Meshfabrics", "Brown / Tan" -> "Brown", "1000 : 1" -> "10001".
+        E.g. "Brown / Tan" -> "Brown", "1000 : 1" -> "1000 1".
+
+        NOTE: previously also stripped spaces ("Mesh fabrics" -> "Meshfabrics").
+        Live-tested against a real category and that's wrong -- GeM doesn't
+        recognize the space-stripped value, and instead of cleanly returning
+        0 it returns an unrelated, inflated result count, corrupting
+        verification. Keep spaces; urlencode() handles proper encoding.
         """
         if not isinstance(val, str):
             return str(val)
         if "/" in val:
             val = val.split("/")[0]
-        # Strip both spaces and colons to match GeM's index representation
-        val = val.replace(" ", "").replace(":", "")
+        val = val.replace(":", "").strip()
         return val
 

@@ -1334,5 +1334,10 @@ class GeMCrawler:
             return str(val)
         if "/" in val:
             val = val.split("/")[0]
-        val = val.replace(" ", "").replace(":", "")
+        # Do NOT strip spaces: live-tested against a real category (multi-word
+        # facet like "Polyester fabric") and stripping doesn't match GeM's
+        # index -- it silently corrupts the query into an unrelated, inflated
+        # result count instead of a clean "not found". urlencode() below
+        # handles proper space encoding.
+        val = val.replace(":", "").strip()
         return val
