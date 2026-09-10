@@ -4,8 +4,6 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ .
-# Set production build variable
-ENV VITE_API_BASE_URL=/api
 RUN npm run build
 
 # --- Stage 2: Build Production Server ---

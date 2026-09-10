@@ -57,7 +57,7 @@ GeM-Filter-Optimizer/
 **Backend**
 - [FastAPI](https://fastapi.tiangolo.com/) + Uvicorn — async API server
 - [Playwright](https://playwright.dev/python/) (Chromium, headless) — the actual fetch layer; GeM's WAF blocks plain `requests` calls, so every scrape/verify goes through a real browser context, managed by a single long-lived `BrowserManager` (dedicated asyncio event loop, page pool, cookie refresh)
-- BeautifulSoup4 + lxml — HTML fallback parsing when the JSON API path fails
+- BeautifulSoup4 + lxml — product-page spec parsing, and HTML fallback parsing when the JSON API path fails
 - Pydantic — request/response models
 
 **Frontend**
@@ -65,8 +65,6 @@ GeM-Filter-Optimizer/
 - Plain CSS with a token system (`index.css`) — no Tailwind/CSS-in-JS; theme switching via a `data-theme` attribute on `:root`
 - [@phosphor-icons/react](https://phosphoricons.com/) — icon set (replaced all emoji-as-icon usage)
 - Google Fonts: **Space Grotesk** (display/headings) + **Inter** (body/data)
-- Recharts — pricing/distribution charts
-- jsPDF + jspdf-autotable — exportable strategy report
 
 ---
 
@@ -104,8 +102,7 @@ npm run dev
 ## 🔌 Advanced Configuration
 
 ### Environment Bindings
-By default, the backend serves unified traffic. For distributed architecture, you can configure explicit routing:
-- **Frontend Build Direct**: `VITE_API_BASE_URL=/api`
+By default, the backend serves unified traffic. The frontend always calls the API at the relative path `/api` (proxied to `:8000` by Vite in dev).
 - **Backend Host Bind**: `0.0.0.0` (Internal container orchestration)
 
 ### Logging & Diagnostics

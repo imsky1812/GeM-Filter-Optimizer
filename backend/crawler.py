@@ -36,6 +36,17 @@ import threading
 from typing import Optional
 from urllib.parse import urlencode, urlparse, parse_qs
 
+from gem_utils import (
+    build_product_url,
+    extract_inline_specs,
+    make_name_resolver,
+    normalize_filter_value,
+    parse_fragment_params,
+    parse_price,
+    pull_facet_values,
+    to_key,
+)
+
 logger = logging.getLogger("gem-crawler")
 
 # Substrings seen in real crashes of the underlying Playwright driver
@@ -179,16 +190,26 @@ class BrowserManager:
             self._loop_thread.start()
             self._loop_ready.wait(timeout=10)
 
-    def run(self, coro):
+    # Longest a caller thread waits on one bridged coroutine. Generous (a big
+    # fetch_many batch legitimately takes minutes), but finite so a hung
+    # browser can't pin request threads forever.
+    _RUN_TIMEOUT = 600
+
+    def run(self, coro, timeout: float = _RUN_TIMEOUT):
         """
         Thread-safe bridge: submit a coroutine to the background event loop
         and block the calling thread until it completes. Safe to call from
         any thread, including ThreadPoolExecutor workers — this is the only
         supported way to touch Playwright from outside the loop thread.
+        Raises TimeoutError (and cancels the coroutine) after `timeout` seconds.
         """
         self._ensure_loop()
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return fut.result()
+        try:
+            return fut.result(timeout=timeout)
+        except TimeoutError:
+            fut.cancel()
+            raise
 
     # ── Browser lifecycle (executes ON the background loop) ───────────────
 
@@ -403,6 +424,10 @@ class BrowserManager:
 
     def refresh_cookies(self):
         self.run(self.refresh_cookies_async())
+
+    def warm_up(self):
+        """Launch Chromium and establish GeM session cookies now, instead of on the first request."""
+        self.run(self._ensure_initialized_async())
 
     def shutdown(self):
         """Gracefully close the browser and stop the background loop."""
@@ -1142,23 +1167,7 @@ class GeMCrawler:
         if price <= 0:
             return None
 
-        specs = {}
-        for key in ("specifications", "product_specifications", "spec_params",
-                     "params", "attributes", "properties", "features"):
-            items = cat.get(key, [])
-            if isinstance(items, list):
-                for item in items:
-                    if isinstance(item, dict):
-                        name = (item.get("name") or item.get("key") or
-                                item.get("label") or item.get("param_name") or "")
-                        value = (item.get("value") or item.get("val") or
-                                 item.get("param_value") or "")
-                        if name and value and len(str(value)) < 200:
-                            specs[str(name).strip()] = str(value).strip()
-            elif isinstance(items, dict):
-                for name, value in items.items():
-                    if name and value and len(str(value)) < 200:
-                        specs[str(name).strip()] = str(value).strip()
+        specs = extract_inline_specs(cat)
 
         return {
             "id": str(cat.get("id", "")),
@@ -1179,12 +1188,7 @@ class GeMCrawler:
             "specs": specs,
         }
 
-    def _build_product_url(self, catalog: dict) -> str:
-        """Build a full product URL from catalog data."""
-        url_parts = catalog.get("url", [])
-        if url_parts and len(url_parts) >= 3:
-            return f"https://mkp.gem.gov.in/{'/'.join(url_parts)}"
-        return ""
+    _build_product_url = staticmethod(build_product_url)
 
     def _parse_facets(self, facets: dict) -> list:
         """Parse facets JSON into a list of filter definitions."""
@@ -1225,38 +1229,24 @@ class GeMCrawler:
 
         return filters
 
-    def _pull_facet_values(self, facet: dict) -> list:
-        """Extract option values from a facet entry."""
-        for key in ("facet_values", "topValues", "top_values", "values",
-                     "entries", "options", "items", "terms"):
-            raw = facet.get(key, [])
-            if not raw:
-                continue
-            vals = []
-            for v in raw:
-                if isinstance(v, dict):
-                    label = (v.get("name") or v.get("value") or
-                             v.get("code") or v.get("label") or "")
-                else:
-                    label = str(v)
-                label = str(label).strip()
-                if label and label.lower() not in ("true", "false", "null", ""):
-                    vals.append(label)
-            if vals:
-                return vals
-        return []
+    _pull_facet_values = staticmethod(pull_facet_values)
 
     def _rebuild_filter_values(self, products: list, filters: list) -> list:
         """Rebuild filter values from enriched product specs."""
+        filter_by_name = {}
+        for f in filters:
+            filter_by_name.setdefault(f["filterName"], f)
+        seen_values = {name: set(f["values"]) for name, f in filter_by_name.items()}
+        resolve_name = make_name_resolver(filter_by_name)
+
         for product in products:
             for spec_name, spec_value in product.get("specs", {}).items():
                 if not spec_value or len(spec_value) > 150:
                     continue
-                for f in filters:
-                    if self._names_match(spec_name, f["filterName"]):
-                        if spec_value not in f["values"]:
-                            f["values"].append(spec_value)
-                        break
+                filter_name = resolve_name(spec_name)
+                if filter_name and spec_value not in seen_values[filter_name]:
+                    seen_values[filter_name].add(spec_value)
+                    filter_by_name[filter_name]["values"].append(spec_value)
 
         # Remove filters with no values
         return [f for f in filters if f.get("values")]
@@ -1272,22 +1262,7 @@ class GeMCrawler:
             url = "https://" + url
 
         parsed = urlparse(url)
-        extra_params = {}
-
-        # Parse fragment-based query params
-        if parsed.fragment:
-            frag = parsed.fragment
-            if frag.startswith("/?"):
-                frag_qs = frag[2:]
-            elif frag.startswith("?"):
-                frag_qs = frag[1:]
-            elif "?" in frag:
-                frag_qs = frag.split("?", 1)[1]
-            else:
-                frag_qs = frag
-            frag_params = parse_qs(frag_qs, keep_blank_values=True)
-            for k, v_list in frag_params.items():
-                extra_params[k] = v_list[0] if len(v_list) == 1 else v_list
+        extra_params = parse_fragment_params(parsed.fragment)
 
         # Parse standard query params
         if parsed.query:
@@ -1302,42 +1277,6 @@ class GeMCrawler:
 
         return clean_url, extra_params
 
-    def _names_match(self, name1: str, name2: str) -> bool:
-        """Check if two spec/filter names are equivalent."""
-        n1 = name1.lower().strip().replace("::", "/")
-        n2 = name2.lower().strip().replace("::", "/")
-        if n1 == n2:
-            return True
-        k1 = re.sub(r'[^a-z0-9]', '', n1)
-        k2 = re.sub(r'[^a-z0-9]', '', n2)
-        return k1 == k2 and len(k1) > 5
-
-    def _parse_price(self, text: str) -> Optional[int]:
-        """Parse a price string into an integer."""
-        cleaned = re.sub(r'[₹,\s]', '', text)
-        cleaned = re.sub(r'(?i)INR|Rs\.?', '', cleaned)
-        m = re.search(r'(\d+(?:\.\d+)?)', cleaned)
-        if m:
-            val = float(m.group(1))
-            if 10 <= val <= 10_000_000:
-                return int(val)
-        return None
-
-    def _to_key(self, name: str) -> str:
-        """Convert a human-readable name to a filter key."""
-        key = re.sub(r'[^a-z0-9\s]', '', name.lower().strip())
-        return re.sub(r'\s+', '_', key).strip('_')[:40]
-
-    def _normalize_filter_value(self, val) -> str:
-        """Normalize a spec filter value for the GeM search API."""
-        if not isinstance(val, str):
-            return str(val)
-        if "/" in val:
-            val = val.split("/")[0]
-        # Do NOT strip spaces: live-tested against a real category (multi-word
-        # facet like "Polyester fabric") and stripping doesn't match GeM's
-        # index -- it silently corrupts the query into an unrelated, inflated
-        # result count instead of a clean "not found". urlencode() below
-        # handles proper space encoding.
-        val = val.replace(":", "").strip()
-        return val
+    _parse_price = staticmethod(parse_price)
+    _to_key = staticmethod(to_key)
+    _normalize_filter_value = staticmethod(normalize_filter_value)

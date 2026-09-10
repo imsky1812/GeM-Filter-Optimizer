@@ -10,12 +10,16 @@ Provides highly-efficient in-memory search for golden filter paths:
 5. Format and return optimal, verified L1 paths.
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import collections
 import json
-import time
 import logging
-from urllib.parse import urlencode
-import requests
+import math
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote, urlencode
+
+from gem_utils import make_name_resolver
 
 logger = logging.getLogger("chain-hunt")
 
@@ -34,9 +38,31 @@ def _chain_scrape(self, url: str, extra_params: dict, location: str = "") -> dic
     return res
 
 
-def _get_facet_values_for_key(self, facets: dict, filter_key: str, filter_name: str = "") -> list:
-    """Legacy stub. Kept for import compatibility."""
-    return []
+def _sort_spec_values(values):
+    """Sort filter values by their leading number (descending), then text."""
+    def parse_value(v):
+        m = re.search(r'[-+]?\d*\.\d+|\d+', str(v))
+        if m:
+            try:
+                return float(m.group(0))
+            except ValueError:
+                pass
+        return -1.0
+    return sorted(values, key=lambda x: (parse_value(x), str(x)), reverse=True)
+
+
+def _stuck_result(api_calls: int, golden_filter_count: int, t_start: float, target_price: int) -> dict:
+    return {
+        "winningPaths": [],
+        "totalPaths": 0,
+        "totalApiCalls": api_calls,
+        "status": "STUCK",
+        "goldenFilterCount": golden_filter_count,
+        "elapsed": round(time.time() - t_start, 1),
+        "bestAchievablePrice": None,
+        "marketMinPrice": None,
+        "targetPrice": target_price,
+    }
 
 
 # ── Main Algorithm: In-Memory Complete Dataset Search (IMCDS) ───────────────
@@ -47,7 +73,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                        mandatory_filters: list = None) -> dict:
     """
     In-Memory Complete Dataset Search (IMCDS) with Live Verification.
-    
+
     1. Paginated scraping of all products in the category (up to 20 pages).
        Stops early when prices exceed target_price * 1.5.
     2. Extract and build clean filter definitions and mapping.
@@ -55,15 +81,12 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     4. Verify the top candidates with a live API request to GeM in parallel.
     5. Format and return optimal, verified L1 paths.
     """
-    import math
-    import collections
-    
     t_start = time.time()
     api_calls = [0]
-    
+
     # Parse URL
     category_url, base_extra = self._normalize_url(category_url)
-    
+
     # ── STEP 1: BULK PAGINATED SCRAPING ──
     base_url = category_url.split("#")[0].split("?")[0]
     if not base_url.endswith("/search"):
@@ -75,7 +98,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         if filtered:
             extra_qs = "&" + urlencode(filtered)
     if location and location.lower() not in ("", "all india", "all"):
-        extra_qs += "&localized_search=" + requests.utils.quote(location)
+        extra_qs += "&localized_search=" + quote(location)
 
     # Force price ascending sort so we get the cheapest products on early pages
     extra_qs += "&sort_type=price_in_asc"
@@ -83,47 +106,27 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     # Fetch Page 1 to get total results count and facets
     page1_url = f"{base_url}?page=1&format=json{extra_qs}"
     logger.info(f"[IMCDS] Fetching Page 1: {page1_url}")
-    
+
     try:
         text = self._fetch(page1_url).strip()
         api_calls[0] += 1
         if not text.startswith("{"):
             logger.error(f"[IMCDS] Page 1 response is not JSON: {text[:200]}")
-            return {
-                "winningPaths": [],
-                "totalPaths": 0,
-                "totalApiCalls": api_calls[0],
-                "status": "STUCK",
-                "goldenFilterCount": len(golden_filters),
-                "elapsed": round(time.time() - t_start, 1),
-                "bestAchievablePrice": None,
-                "marketMinPrice": None,
-                "targetPrice": target_price,
-            }
+            return _stuck_result(api_calls[0], len(golden_filters), t_start, target_price)
         data1 = json.loads(text)
     except Exception as e:
         logger.error(f"[IMCDS] Failed to fetch Page 1: {e}")
-        return {
-            "winningPaths": [],
-            "totalPaths": 0,
-            "totalApiCalls": api_calls[0],
-            "status": "STUCK",
-            "goldenFilterCount": len(golden_filters),
-            "elapsed": round(time.time() - t_start, 1),
-            "bestAchievablePrice": None,
-            "marketMinPrice": None,
-            "targetPrice": target_price,
-        }
+        return _stuck_result(api_calls[0], len(golden_filters), t_start, target_price)
 
     total_results = data1.get("number_of_results", 0)
     facets = data1.get("facets", {})
     catalogs1 = data1.get("catalogs", [])
     per_page = max(len(catalogs1), 10)
     total_pages = max(1, math.ceil(total_results / per_page))
-    
+
     # Cap total pages to 20 for rate limiting safety
     total_pages = min(total_pages, 20)
-    
+
     logger.info(f"[IMCDS] Total products: {total_results}, Pages to scrape: {total_pages}")
 
     def parse_catalog(cat: dict) -> dict | None:
@@ -142,15 +145,12 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             "specs": self._extract_inline_specs(cat),
         }
 
-    all_products = []
-    for cat in catalogs1:
-        p = parse_catalog(cat)
-        if p:
-            all_products.append(p)
+    def parse_catalogs(data: dict) -> list:
+        return [p for cat in data.get("catalogs", []) if (p := parse_catalog(cat))]
 
-    # Check first page prices
+    all_products = parse_catalogs(data1)
     page1_prices = [p["price"] for p in all_products]
-    
+
     # Fetch subsequent pages in parallel
     def fetch_page(page: int) -> list:
         purl = f"{base_url}?page={page}&format=json{extra_qs}"
@@ -159,13 +159,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             if not t.startswith("{"):
                 logger.warning(f"[IMCDS] Page {page} response is not JSON: {t[:200]}")
                 return []
-            d = json.loads(t)
-            page_products = []
-            for cat in d.get("catalogs", []):
-                p = parse_catalog(cat)
-                if p:
-                    page_products.append(p)
-            return page_products
+            return parse_catalogs(json.loads(t))
         except Exception as e:
             logger.warning(f"[IMCDS] Failed to fetch page {page}: {e}")
             return []
@@ -179,11 +173,10 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 api_calls[0] += 1
                 page = future_to_page[future]
                 try:
-                    res = future.result()
-                    if res:
-                        all_products.extend(res)
+                    all_products.extend(future.result())
                 except Exception as e:
                     logger.error(f"[IMCDS] Error on page {page}: {e}")
+
     def dedupe_and_sort(raw_products: list) -> list:
         seen = {}
         for p in raw_products:
@@ -220,11 +213,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 api_calls[0] += 1
                 if not t.startswith("{"):
                     continue
-                d = json.loads(t)
-                for cat in d.get("catalogs", []):
-                    p = parse_catalog(cat)
-                    if p:
-                        all_products.append(p)
+                all_products.extend(parse_catalogs(json.loads(t)))
             except Exception as e:
                 logger.warning(f"[IMCDS] Failed to fetch descending page {page}: {e}")
 
@@ -238,41 +227,31 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     # Extract facet definitions from page 1 to get name_to_code mapping
     facet_defs = self._extract_facet_defs(facets)
     name_to_code = {fd["filterName"]: fd["filterKey"] for fd in facet_defs}
-    
-    # In-memory mapping of inline specs for all scraped products
+
+    # In-memory mapping of inline specs for all scraped products. Spec names
+    # repeat on every product, so each distinct name is resolved once.
+    resolve_name = make_name_resolver(name_to_code, match=self._names_match)
     for p in products:
-        raw_specs = p.get("specs") or {}
         matched_specs = {}
-        for spec_name, spec_value in raw_specs.items():
+        for spec_name, spec_value in (p.get("specs") or {}).items():
             if not spec_value or len(spec_value) > 150:
                 continue
-            matched_code = name_to_code.get(spec_name)
-            if not matched_code:
-                for facet_name, facet_code in name_to_code.items():
-                    if self._names_match(spec_name, facet_name):
-                        matched_code = facet_code
-                        break
-            if matched_code:
-                matched_specs[matched_code] = spec_value
-            else:
-                matched_specs[self._to_key(spec_name)] = spec_value
+            facet_name = resolve_name(spec_name)
+            key = name_to_code[facet_name] if facet_name else self._to_key(spec_name)
+            matched_specs[key] = spec_value
         p["specs"] = matched_specs
 
     # Filter relevant products (cap blockers to 30 to stay within rate limits)
     blockers = [p for p in products if p["price"] <= target_price]
     non_blockers = [p for p in products if p["price"] > target_price]
     relevant_products = blockers[:30] + non_blockers[:10]
-    
+
     # Optimize PDP page visits: only fetch PDP specs for relevant products missing golden keys
     golden_keys = {fd["filterKey"] for fd in facet_defs if fd.get("isGolden")}
-    to_enrich = []
-    for p in relevant_products:
-        missing_golden = golden_keys - set(p["specs"].keys())
-        if missing_golden:
-            to_enrich.append(p)
-            
+    to_enrich = [p for p in relevant_products if golden_keys - set(p["specs"].keys())]
+
     logger.info(f"[IMCDS] Relevant products count: {len(relevant_products)}. Fetching PDP specs for {len(to_enrich)} products missing golden keys (max 10 parallel).")
-    
+
     # Enrich in parallel
     if to_enrich:
         enrich_failures = 0
@@ -295,19 +274,6 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     # ── STEP 3: BFS SET-COVER SEARCH ──
     excluded = set(excluded_filter_keys or [])
     excluded.add("mse_applicable")
-    
-    # Build clean golden filters list from passed golden_filters
-    import re
-    def sort_spec_values(values):
-        def parse_value(v):
-            m = re.search(r'[-+]?\d*\.\d+|\d+', str(v))
-            if m:
-                try:
-                    return float(m.group(0))
-                except ValueError:
-                    pass
-            return -1.0
-        return sorted(values, key=lambda x: (parse_value(x), str(x)), reverse=True)
 
     golden_list = []
     for f in golden_filters:
@@ -325,22 +291,20 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 logger.info(f"[BFS Prune] Skipping filter {f.get('filterName')} ({key}) because only {populated_ratio:.0%} of enriched products have it populated.")
                 continue
 
-            sorted_vals = sort_spec_values(f.get("values", []))
             golden_list.append({
                 "filterKey": f["filterKey"],
                 "filterName": f["filterName"],
-                "values": sorted_vals,
+                "values": _sort_spec_values(f.get("values", [])),
             })
-            
+
     # Pre-apply mandatory filters
     start_filters = {}
-    if mandatory_filters:
-        for mf in mandatory_filters:
-            k = mf.get("filterKey")
-            v = mf.get("value")
-            if k and v:
-                start_filters[k] = v
-                
+    for mf in mandatory_filters or []:
+        k = mf.get("filterKey")
+        v = mf.get("value")
+        if k and v:
+            start_filters[k] = v
+
     # Filter products matching active conditions
     def matches_filters(product_specs, active_dict):
         for k, v in active_dict.items():
@@ -353,80 +317,73 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         return True
 
     start_products = [p for p in products if matches_filters(p["specs"], start_filters)]
-    
+
     # Establish original min price and seller count
     market_min_price = min((p["price"] for p in start_products), default=None)
     orig_sellers = len({p["seller_id"] for p in start_products})
     min_sellers_limit = min(3, orig_sellers)
-    
+
     # Helper to evaluate filter state locally
     def evaluate_state(active_dict):
         matched = [p for p in start_products if matches_filters(p["specs"], active_dict)]
         prices = [p["price"] for p in matched]
-        min_p = min(prices) if prices else None
-        blockers_left = [p for p in matched if p["price"] <= target_price]
-        sellers = len({p["seller_id"] for p in matched})
         return {
             "products": matched,
-            "min_price": min_p,
-            "blockers": blockers_left,
-            "sellers": sellers,
-            "total": len(matched)
+            "min_price": min(prices) if prices else None,
+            "blockers": [p for p in matched if p["price"] <= target_price],
+            "sellers": len({p["seller_id"] for p in matched}),
+            "total": len(matched),
         }
 
     # BFS Queue: stores (active_filters_dict, path_steps_list)
     # where path_steps_list is a list of tuples (gf_dict, value)
     queue = collections.deque([({}, [])])
-    visited = set()
-    visited.add(frozenset())
-    
+    visited = {frozenset()}
+
     local_winning_paths = []
     local_partial_paths = []
-    
+
     max_states = 5000
     states_checked = 0
-    
+
     while queue and states_checked < max_states:
         curr_active, path_steps = queue.popleft()
         states_checked += 1
-        
+
         eval_res = evaluate_state(curr_active)
-        is_blockers_eliminated = (len(eval_res["blockers"]) == 0)
-        
-        if is_blockers_eliminated:
+
+        if not eval_res["blockers"]:
             local_winning_paths.append((curr_active, path_steps, eval_res))
             if len(local_winning_paths) >= 30:
                 break
             continue
-            
+
         local_partial_paths.append((curr_active, path_steps, eval_res))
-        
+
         # Max search depth
         if len(path_steps) >= 4:
             continue
-            
+
         # Expand
-        applied_keys = set(curr_active.keys())
         for gf in golden_list:
             key = gf["filterKey"]
-            if key in applied_keys:
+            if key in curr_active:
                 continue
-                
+
             # Restrict expansion to only values present in the matching products
             allowed_values = {str(p["specs"].get(key)).strip().lower() for p in eval_res["products"] if p["specs"].get(key)}
-            
+
             for val in gf.get("values", []):
                 if str(val).strip().lower() not in allowed_values:
                     continue
-                    
+
                 next_active = dict(curr_active)
                 next_active[key] = val
-                
+
                 sig = frozenset(next_active.items())
                 if sig not in visited:
                     visited.add(sig)
                     queue.append((next_active, path_steps + [(gf, val)]))
-
 
     # ── STEP 4: PARALLEL LIVE PATH VERIFICATION ──
     # Sort winning paths by quality before capping to 20 -- otherwise which
@@ -448,17 +405,14 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         # Filter out empty path and sort partial paths so that those eliminating the most blockers (in-memory) are preferred,
         # then higher min price, then fewer products, then shorter chains.
         filtered_partials = [item for item in local_partial_paths if item[1]]
-        
+
         def sort_local_partial_key(item):
             active_dict, steps_list, eval_res = item
-            blockers_count = len(eval_res["blockers"])
-            min_price = eval_res["min_price"] or 0
-            total = eval_res["total"]
             return (
-                blockers_count,    # Fewer blockers left is better
-                -min_price,        # Higher min price is better
-                total,             # Fewer products is better
-                len(steps_list)    # Shorter chain is better
+                len(eval_res["blockers"]),    # Fewer blockers left is better
+                -(eval_res["min_price"] or 0),  # Higher min price is better
+                eval_res["total"],            # Fewer products is better
+                len(steps_list),              # Shorter chain is better
             )
         filtered_partials.sort(key=sort_local_partial_key)
 
@@ -478,14 +432,14 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             filtered_partials,
             key=lambda item: item[2]["min_price"] or 0,
             default=None,
-        ) if filtered_partials else None
+        )
 
         candidates += top_by_blockers
         if best_by_price is not None and best_by_price not in top_by_blockers:
             candidates.append(best_by_price)
-        
+
     verified_paths = []
-    
+
     def verify_candidate(item):
         active_dict, steps_list, local_eval = item
         # Build query parameters. Mandatory filters must be included here too --
@@ -541,41 +495,94 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     def extract_competitor_insights(matched_products, t_price):
         if not matched_products:
             return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
-        valid_products = [p for p in matched_products if p["price"] > t_price]
-        valid_products.sort(key=lambda x: x["price"])
-        if len(valid_products) == 0:
+        valid_products = sorted((p for p in matched_products if p["price"] > t_price), key=lambda x: x["price"])
+        if not valid_products:
             return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
-            
+
         l2 = format_competitor(valid_products[0])
         l2_brand = l2.get("brand", "").strip().lower()
-        
+
         if len(valid_products) == 1:
             return {"message": "no L2 and L3 on this path", "l2": l2, "l3": None}
-            
+
         l3 = None
         for p in valid_products[1:]:
             p_brand = p.get("brand", "").strip().lower()
             if p_brand != l2_brand and p_brand != "":
                 l3 = format_competitor(p)
                 break
-                
+
         if l3:
             return {
                 "message": f"L2 and L3 found with their product names: {l2['name']} and {l3['name']}",
                 "l2": l2,
                 "l3": l3
             }
-        else:
-            return {
-                "message": "found L2 and L3 but of same brands",
-                "l2": l2,
-                "l3": format_competitor(valid_products[1])
-            }
+        return {
+            "message": "found L2 and L3 but of same brands",
+            "l2": l2,
+            "l3": format_competitor(valid_products[1])
+        }
+
+    def build_iterations(steps_list, live_res=None, can_win=False):
+        """
+        Per-step breakdown of a filter path. Intermediate steps use in-memory
+        estimates; the final step uses the live-verified numbers when
+        `live_res` is given. Only `can_win` paths may label a step L1_WIN.
+        """
+        iterations = []
+        curr_act = {}
+        prev_min = market_min_price
+        for idx, (gf, val) in enumerate(steps_list):
+            curr_act[gf["filterKey"]] = val
+
+            if live_res is not None and idx == len(steps_list) - 1:
+                new_min = live_res["min_price"]
+                new_total = live_res["total"]
+                sellers_count = live_res["seller_count"]
+            else:
+                step_eval = evaluate_state(curr_act)
+                new_min = step_eval["min_price"]
+                new_total = step_eval["total"]
+                sellers_count = step_eval["sellers"]
+
+            if new_min is not None and prev_min is not None and new_min <= prev_min:
+                result = "LATERAL"
+            elif not can_win or (new_min is not None and new_min <= target_price):
+                result = "ELIMINATED"
+            else:
+                result = "L1_WIN"
+
+            iterations.append({
+                "iteration": idx + 1,
+                "prevMinPrice": prev_min,
+                "filterApplied": {
+                    "filterKey": gf["filterKey"],
+                    "filterName": gf["filterName"],
+                    "value": val,
+                },
+                "result": result,
+                "newMinPrice": new_min,
+                "newTotal": new_total,
+                "sellerCount": sellers_count,
+            })
+            prev_min = new_min
+        return iterations
+
+    def format_verified_path(active_dict, steps_list, live_res, status, is_untapped):
+        return {
+            "iterations": build_iterations(steps_list, live_res, can_win=(status == "WIN")),
+            "activeFilters": {**start_filters, **active_dict},
+            "status": status,
+            "isUntapped": is_untapped,
+            "nicheMinPrice": live_res["min_price"],
+            "totalProducts": live_res["total"],
+            "sellerCount": live_res["seller_count"],
+            "chainLength": len(active_dict) + len(start_filters),
+            "competitorInsights": extract_competitor_insights(live_res["products"], target_price),
+        }
 
     # ── STEP 5: RECONSTRUCT AND SORT VERIFIED RESULTS ──
-    formatted_winning = []
-    
-    # Process verified candidates
     winning_candidates = []
     partial_candidates = []
     unconfirmed_candidates = []
@@ -599,14 +606,14 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             logger.warning(f"[IMCDS] Mismatch detected: live total=0 but local total={local_eval['total']} for path {steps_list}. Marking unconfirmed instead of discarding.")
             unconfirmed_candidates.append((active_dict, steps_list, local_eval))
             continue
-            
+
         is_l1_win = (total > 0 and (min_price is None or min_price > target_price) and sellers >= min_sellers_limit)
-        
+
         if is_untapped or is_l1_win:
             winning_candidates.append((active_dict, steps_list, local_eval, live_res, is_untapped))
         else:
             partial_candidates.append((active_dict, steps_list, local_eval, live_res))
-            
+
     # Sort verified wins: real L1 win > untapped, shorter path, higher price gap
     def sort_winning_key(item):
         active_dict, steps_list, local_eval, live_res, is_untapped = item
@@ -617,179 +624,49 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             len(steps_list),               # Shorter path preferred
             -gap                           # Larger gap preferred
         )
-        
+
     winning_candidates.sort(key=sort_winning_key)
-    
-    for active_dict, steps_list, local_eval, live_res, is_untapped in winning_candidates[:20]:
-        # Build iterations list (use in-memory values for intermediate steps, live values for final step)
-        iterations = []
-        curr_act = {}
-        prev_min = market_min_price
-        for idx, (gf, val) in enumerate(steps_list):
-            curr_act[gf["filterKey"]] = val
-            
-            # If final step, use live verified values
-            if idx == len(steps_list) - 1:
-                new_min = live_res["min_price"]
-                new_total = live_res["total"]
-                sellers_count = live_res["seller_count"]
-            else:
-                # Use in-memory estimate
-                step_eval = evaluate_state(curr_act)
-                new_min = step_eval["min_price"]
-                new_total = step_eval["total"]
-                sellers_count = step_eval["sellers"]
-                
-            step = {
-                "iteration": idx + 1,
-                "prevMinPrice": prev_min,
-                "filterApplied": {
-                    "filterKey": gf["filterKey"],
-                    "filterName": gf["filterName"],
-                    "value": val,
-                },
-                "result": "LATERAL" if (new_min is not None and prev_min is not None and new_min <= prev_min) else (
-                    "ELIMINATED" if (new_min is not None and new_min <= target_price) else "L1_WIN"
-                ),
-                "newMinPrice": new_min,
-                "newTotal": new_total,
-                "sellerCount": sellers_count,
-            }
-            iterations.append(step)
-            prev_min = new_min
-            
-        formatted_winning.append({
-            "iterations": iterations,
-            "activeFilters": {**start_filters, **active_dict},
-            "status": "WIN",
-            "isUntapped": is_untapped,
-            "nicheMinPrice": live_res["min_price"],
-            "totalProducts": live_res["total"],
-            "sellerCount": live_res["seller_count"],
-            "chainLength": len(active_dict) + len(start_filters),
-            "competitorInsights": extract_competitor_insights(live_res["products"], target_price)
-        })
+
+    formatted_winning = [
+        format_verified_path(active_dict, steps_list, live_res, "WIN", is_untapped)
+        for active_dict, steps_list, local_eval, live_res, is_untapped in winning_candidates[:20]
+    ]
 
     # If no winning paths, format the verified partial paths
     if not formatted_winning and partial_candidates:
-        def sort_partial_key(item):
-            active_dict, steps_list, local_eval, live_res = item
-            min_price = live_res["min_price"] or 0
-            total = live_res["total"]
-            return (
-                -min_price,        # Higher min price preferred
-                total,             # Fewer remaining products preferred
-                len(steps_list)    # Shorter path preferred
-            )
-            
-        partial_candidates.sort(key=sort_partial_key)
-        
-        for active_dict, steps_list, local_eval, live_res in partial_candidates[:5]:
-            iterations = []
-            curr_act = {}
-            prev_min = market_min_price
-            for idx, (gf, val) in enumerate(steps_list):
-                curr_act[gf["filterKey"]] = val
-                
-                if idx == len(steps_list) - 1:
-                    new_min = live_res["min_price"]
-                    new_total = live_res["total"]
-                    sellers_count = live_res["seller_count"]
-                else:
-                    step_eval = evaluate_state(curr_act)
-                    new_min = step_eval["min_price"]
-                    new_total = step_eval["total"]
-                    sellers_count = step_eval["sellers"]
-                    
-                step = {
-                    "iteration": idx + 1,
-                    "prevMinPrice": prev_min,
-                    "filterApplied": {
-                        "filterKey": gf["filterKey"],
-                        "filterName": gf["filterName"],
-                        "value": val,
-                    },
-                    "result": "LATERAL" if (new_min is not None and prev_min is not None and new_min <= prev_min) else "ELIMINATED",
-                    "newMinPrice": new_min,
-                    "newTotal": new_total,
-                    "sellerCount": sellers_count,
-                }
-                iterations.append(step)
-                prev_min = new_min
-                
-            formatted_winning.append({
-                "iterations": iterations,
-                "activeFilters": {**start_filters, **active_dict},
-                "status": "PARTIAL",
-                "isUntapped": False,
-                "nicheMinPrice": live_res["min_price"],
-                "totalProducts": live_res["total"],
-                "sellerCount": live_res["seller_count"],
-                "chainLength": len(active_dict) + len(start_filters),
-                "competitorInsights": extract_competitor_insights(live_res["products"], target_price)
-            })
+        partial_candidates.sort(key=lambda item: (
+            -(item[3]["min_price"] or 0),  # Higher min price preferred
+            item[3]["total"],              # Fewer remaining products preferred
+            len(item[1]),                  # Shorter path preferred
+        ))
+        formatted_winning = [
+            format_verified_path(active_dict, steps_list, live_res, "PARTIAL", False)
+            for active_dict, steps_list, local_eval, live_res in partial_candidates[:5]
+        ]
 
     # Format unconfirmed candidates (mismatch-guarded: strong locally, live query
     # didn't corroborate). Always surfaced alongside whatever real result we have --
     # even next to a confirmed win, these are extra leads worth a manual check.
-    formatted_unconfirmed = []
-    if unconfirmed_candidates:
-        def sort_unconfirmed_key(item):
-            active_dict, steps_list, local_eval = item
-            return (
-                -(local_eval["min_price"] or 0),  # Higher local price preferred
-                local_eval["total"],               # Fewer remaining products preferred
-                len(steps_list),                   # Shorter path preferred
-            )
+    unconfirmed_candidates.sort(key=lambda item: (
+        -(item[2]["min_price"] or 0),  # Higher local price preferred
+        item[2]["total"],              # Fewer remaining products preferred
+        len(item[1]),                  # Shorter path preferred
+    ))
+    formatted_unconfirmed = [
+        {
+            "iterations": build_iterations(steps_list),
+            "activeFilters": {**start_filters, **active_dict},
+            "status": "UNCONFIRMED",
+            "nicheMinPrice": local_eval["min_price"],
+            "totalProducts": local_eval["total"],
+            "sellerCount": local_eval.get("sellers", 0),
+            "chainLength": len(active_dict) + len(start_filters),
+        }
+        for active_dict, steps_list, local_eval in unconfirmed_candidates[:5]
+    ]
 
-        unconfirmed_candidates.sort(key=sort_unconfirmed_key)
-
-        for active_dict, steps_list, local_eval in unconfirmed_candidates[:5]:
-            iterations = []
-            curr_act = {}
-            prev_min = market_min_price
-            for idx, (gf, val) in enumerate(steps_list):
-                curr_act[gf["filterKey"]] = val
-                step_eval = evaluate_state(curr_act)
-                new_min = step_eval["min_price"]
-                new_total = step_eval["total"]
-                sellers_count = step_eval["sellers"]
-
-                step = {
-                    "iteration": idx + 1,
-                    "prevMinPrice": prev_min,
-                    "filterApplied": {
-                        "filterKey": gf["filterKey"],
-                        "filterName": gf["filterName"],
-                        "value": val,
-                    },
-                    "result": "LATERAL" if (new_min is not None and prev_min is not None and new_min <= prev_min) else "ELIMINATED",
-                    "newMinPrice": new_min,
-                    "newTotal": new_total,
-                    "sellerCount": sellers_count,
-                }
-                iterations.append(step)
-                prev_min = new_min
-
-            formatted_unconfirmed.append({
-                "iterations": iterations,
-                "activeFilters": {**start_filters, **active_dict},
-                "status": "UNCONFIRMED",
-                "nicheMinPrice": local_eval["min_price"],
-                "totalProducts": local_eval["total"],
-                "sellerCount": local_eval.get("sellers", 0),
-                "chainLength": len(active_dict) + len(start_filters),
-            })
-
-    elapsed = time.time() - t_start
     status = "WIN" if any(p["status"] == "WIN" for p in formatted_winning) else "PARTIAL"
-
-    # Calculate best achievable price
-    best_achievable = 0
-    for p in formatted_winning:
-        mp = p.get("nicheMinPrice") or 0
-        if mp > best_achievable:
-            best_achievable = mp
+    best_achievable = max((p.get("nicheMinPrice") or 0 for p in formatted_winning), default=0)
 
     return {
         "winningPaths": formatted_winning,
@@ -798,7 +675,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         "totalApiCalls": api_calls[0],
         "status": status,
         "goldenFilterCount": len(golden_list),
-        "elapsed": round(elapsed, 1),
+        "elapsed": round(time.time() - t_start, 1),
         "bestAchievablePrice": best_achievable if best_achievable > 0 else None,
         "marketMinPrice": market_min_price,
         "targetPrice": target_price,

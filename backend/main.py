@@ -12,7 +12,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 import hashlib
+import threading
 import time
 import logging
 import os
@@ -31,13 +33,19 @@ logger = logging.getLogger("gem-optimizer")
 async def lifespan(app: FastAPI):
     """Manage browser lifecycle: start on boot, shutdown on exit."""
     logger.info("Starting GeM Filter Optimizer v5.0.0...")
-    try:
-        from crawler import BrowserManager
-        bm = BrowserManager.get_instance()
-        logger.info("Browser manager initialized.")
-    except Exception as e:
-        logger.warning(f"Browser pre-init skipped (will lazy-init on first request): {e}")
-    
+
+    # Launch Chromium in the background so the first user request doesn't pay
+    # for the browser launch + GeM warmup, without blocking server startup.
+    def _warm_browser():
+        try:
+            from crawler import BrowserManager
+            BrowserManager.get_instance().warm_up()
+            logger.info("Browser warmed up.")
+        except Exception as e:
+            logger.warning(f"Browser warmup failed (will retry on first request): {e}")
+
+    threading.Thread(target=_warm_browser, daemon=True, name="browser-warmup").start()
+
     yield  # App is running
     
     # Shutdown
@@ -69,7 +77,28 @@ app.add_middleware(
 
 # ── Cache (30 min TTL) ────────────────────────────────────────────────────────
 _cache: dict = {}
+_cache_lock = threading.Lock()
 CACHE_TTL = 1800
+CACHE_MAX_ENTRIES = 100
+
+
+def _cache_get(key: str):
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and time.time() - entry["ts"] < CACHE_TTL:
+            return entry["data"]
+        _cache.pop(key, None)
+        return None
+
+
+def _cache_set(key: str, data: dict):
+    with _cache_lock:
+        now = time.time()
+        for k in [k for k, e in _cache.items() if now - e["ts"] >= CACHE_TTL]:
+            del _cache[k]
+        if len(_cache) >= CACHE_MAX_ENTRIES:
+            del _cache[min(_cache, key=lambda k: _cache[k]["ts"])]
+        _cache[key] = {"data": data, "ts": now}
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -149,9 +178,7 @@ def scrape(req: ScrapeRequest):
         "mkp.gem.gov.in",
         "mkp.gemorion.org",
     ]
-    from urllib.parse import urlparse as _urlparse
-
-    parsed_host = _urlparse(url).hostname or ""
+    parsed_host = urlparse(url).hostname or ""
     if not any(parsed_host == h or parsed_host.endswith("." + h) for h in gem_hosts):
         raise HTTPException(
             status_code=400,
@@ -159,10 +186,9 @@ def scrape(req: ScrapeRequest):
         )
 
     cache_key = hashlib.md5(f"{url}|{req.location}".encode()).hexdigest()
-    if cache_key in _cache:
-        entry = _cache[cache_key]
-        if time.time() - entry["ts"] < CACHE_TTL:
-            return {**entry["data"], "cached": True}
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
 
     # Use new Playwright-based crawler
     from crawler import GeMCrawler
@@ -184,13 +210,14 @@ def scrape(req: ScrapeRequest):
             )
         raise HTTPException(status_code=422, detail=detail)
 
-    _cache[cache_key] = {"data": result, "ts": time.time()}
+    _cache_set(cache_key, result)
     return {**result, "cached": False}
 
 
 @api_router.delete("/cache")
 def clear_cache():
-    _cache.clear()
+    with _cache_lock:
+        _cache.clear()
     return {"cleared": True}
 
 

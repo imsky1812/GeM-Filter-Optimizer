@@ -31,6 +31,7 @@ def check(name, condition):
     else:
         FAIL += 1
         print(f"  FAIL: {name}")
+    assert condition, name
 
 
 PRODUCT_HTML = """

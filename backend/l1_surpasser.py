@@ -8,8 +8,9 @@ Architecture:
   GeMFilterScraper   — live golden filter option extraction from facets
   L1ChainSurpasser   — greedy-sequential elimination loop
 
-All network calls use exponential backoff (base 1s, max 32s, 5 retries).
-Global concurrency is capped at 8 simultaneous HTTP requests via semaphore.
+All network calls go through crawler.BrowserManager (a shared Playwright
+browser, since GeM's WAF blocks plain HTTP clients), which retries each
+fetch and caps concurrency at 8 pages in flight.
 
 Usage:
   python l1_surpasser.py <category_url> <my_catalogue_id> <my_price>
@@ -21,13 +22,22 @@ import math
 import time
 import logging
 import itertools
-import threading
-import requests
 from typing import Optional
-from urllib.parse import urlencode, urlparse, parse_qs
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlencode, urlparse
+
+from bs4 import BeautifulSoup
+
+from gem_utils import (
+    HTML_PARSER,
+    extract_inline_specs,
+    extract_specs_from_soup,
+    make_name_resolver,
+    names_match as _names_match,
+    parse_fragment_params,
+    parse_price,
+    pull_facet_values,
+    to_key,
+)
 
 logger = logging.getLogger("l1-surpasser")
 
@@ -49,26 +59,6 @@ class IncompleteScrapeError(Exception):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SHARED CONSTANTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Cache-Control": "max-age=0",
-}
-
-# Global semaphore: no more than 8 concurrent HTTP requests to GeM anywhere
-_HTTP_SEMAPHORE = threading.BoundedSemaphore(8)
 
 # Backoff constants
 _BACKOFF_BASE = 1      # seconds
@@ -95,97 +85,28 @@ def _clean_category_url(url: str) -> str:
 
 def _extract_fragment_params(url: str) -> dict:
     """Extract query params from fragment-based URLs (search#/?q=XXX&...)."""
-    parsed = urlparse(url.strip())
-    extra = {}
-    if parsed.fragment:
-        frag = parsed.fragment
-        if frag.startswith("/?"):
-            frag_qs = frag[2:]
-        elif frag.startswith("?"):
-            frag_qs = frag[1:]
-        elif "?" in frag:
-            frag_qs = frag.split("?", 1)[1]
-        else:
-            frag_qs = frag
-        frag_params = parse_qs(frag_qs, keep_blank_values=True)
-        for k, v_list in frag_params.items():
-            extra[k] = v_list[0] if len(v_list) == 1 else v_list
-    return extra
+    return parse_fragment_params(urlparse(url.strip()).fragment)
 
 
-_COOKIE_LOCK = threading.Lock()
-_last_cookie_refresh_time = 0.0
-
-def _refresh_session_cookies_with_playwright(session: requests.Session) -> bool:
-    """Launch headless Playwright browser to establish valid session cookies on GeM."""
-    global _last_cookie_refresh_time
-    with _COOKIE_LOCK:
-        now = time.time()
-        if now - _last_cookie_refresh_time < 30:
-            logger.info("[Playwright] Cookies were refreshed recently, skipping redundant refresh.")
-            return True
-            
-        logger.info("[Playwright] Refreshing session cookies via headless Chromium...")
-        try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    user_agent=_HEADERS["User-Agent"]
-                )
-                page = context.new_page()
-                page.goto("https://mkp.gem.gov.in/", timeout=30000)
-                
-                # Extract cookies
-                cookies = context.cookies()
-                browser.close()
-                
-            # Clear current cookies and inject the new ones
-            session.cookies.clear()
-            for cookie in cookies:
-                session.cookies.set(
-                    cookie["name"],
-                    cookie["value"],
-                    domain=cookie["domain"],
-                    path=cookie["path"]
-                )
-            _last_cookie_refresh_time = now
-            logger.info(f"[Playwright] Successfully loaded {len(cookies)} cookies into requests session.")
-            return True
-        except Exception as e:
-            logger.error(f"[Playwright] Failed to refresh cookies: {e}")
-            return False
-
-
-def _fetch_with_backoff(session: requests.Session, url: str) -> str:
+def _fetch_with_backoff(url: str) -> str:
     """
     Fetch a URL using the persistent Playwright browser to bypass GeM's WAF.
 
-    Playwright's sync API can only be driven from the thread that created
-    it, so this delegates to BrowserManager.fetch(), which runs the actual
-    browser I/O on its own dedicated background thread (async Playwright
-    under the hood) and blocks this calling thread for the result. Safe to
-    call from any thread.
+    Delegates to BrowserManager.fetch(), which runs the browser I/O on its
+    own background event-loop thread and blocks this calling thread for the
+    result. Safe to call from any thread.
     """
     from crawler import BrowserManager
     return BrowserManager.get_instance().fetch(url, timeout=30000, retries=_MAX_FETCH_RETRIES)
 
 
-def _names_match(name1: str, name2: str) -> bool:
-    """Check if two spec/filter names are semantically equivalent."""
-    n1 = name1.lower().strip().replace("::", "/")
-    n2 = name2.lower().strip().replace("::", "/")
-    if n1 == n2:
-        return True
-    k1 = re.sub(r'[^a-z0-9]', '', n1)
-    k2 = re.sub(r'[^a-z0-9]', '', n2)
-    # k1 == k2 is already an exact match once punctuation/whitespace is
-    # stripped, so a short name is not a false-positive risk here (that
-    # would matter for a substring/prefix test, not equality) -- only
-    # guard against both sides degenerating to an empty string. A `len > 5`
-    # floor made short-but-real golden facet names (e.g. "BIS") never match
-    # a differently-punctuated rendering of the same name.
-    return bool(k1) and k1 == k2
+def _fetch_many_with_backoff(urls: list) -> list:
+    """
+    Fetch several URLs concurrently through the shared browser. Returns a
+    list aligned with `urls`; failed entries are None.
+    """
+    from crawler import BrowserManager
+    return BrowserManager.get_instance().fetch_many(urls, timeout=30000, retries=_MAX_FETCH_RETRIES)
 
 
 def _catalogue_id_matches(my_id: str, candidate_id: str) -> bool:
@@ -201,27 +122,6 @@ def _catalogue_id_matches(my_id: str, candidate_id: str) -> bool:
     if not my_id:
         return False
     return candidate_id == my_id or candidate_id.startswith(my_id + "-")
-
-
-def _create_session() -> requests.Session:
-    """Create a requests.Session with retry strategy and browser headers."""
-    session = requests.Session()
-    session.headers.update(_HEADERS)
-
-    retry_strategy = Retry(
-        total=5,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-
-    # Establish initial cookies (JSESSIONID etc.) via Playwright
-    _refresh_session_cookies_with_playwright(session)
-
-    return session
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -245,17 +145,19 @@ class GeMCategoryScraper:
     COMPLETENESS_THRESHOLD = 0.95
     MAX_SCRAPE_ATTEMPTS = 3
     MAX_PAGES = 500  # absolute safety cap
+    # Pages fetched concurrently per round. Small, because the scrape usually
+    # stops early (price-sorted, capped at max_price) and every page fetched
+    # past that point is a wasted request against GeM's WAF budget.
+    PAGE_BATCH_SIZE = 4
 
     def __init__(
         self,
-        session: requests.Session,
         category_url: str,
         active_filters: Optional[dict] = None,
         my_catalogue_id: str = "",
         fragment_params: Optional[dict] = None,
         max_price: Optional[int] = None,
     ):
-        self._session = session
         self._base_url = _clean_category_url(category_url)
         self._active_filters = dict(active_filters or {})
         self._my_catalogue_id = str(my_catalogue_id)
@@ -283,13 +185,16 @@ class GeMCategoryScraper:
 
         return f"{self._base_url}?{urlencode(params)}"
 
-    # ── Single page fetch ────────────────────────────────────────────────────
+    # ── Page fetch ───────────────────────────────────────────────────────────
 
-    def _fetch_page(self, page: int) -> dict:
-        """Fetch a single JSON page with exponential backoff."""
-        url = self._build_page_url(page)
-        text = _fetch_with_backoff(self._session, url).strip()
-
+    @staticmethod
+    def _parse_page(page: int, text: str) -> dict:
+        """
+        Parse one page's JSON body. Raises ValueError(message, raw_text) for
+        a non-JSON or malformed body, so _execute_full_scrape can route page
+        1 into the HTML fallback.
+        """
+        text = text.strip()
         if not text.startswith("{"):
             raise ValueError(f"Non-JSON response from page {page} (got HTML/empty)", text)
 
@@ -299,11 +204,33 @@ class GeMCategoryScraper:
             # A malformed/truncated body (e.g. a partial WAF block response)
             # still starts with "{" but isn't valid JSON. json.JSONDecodeError
             # is a ValueError with only one arg, so on its own it would slip
-            # past the 2-arg check below and propagate uncaught out of scrape()
-            # instead of degrading gracefully like the "not JSON at all" case
-            # already does -- raise the same 2-arg shape so the existing
-            # HTML-fallback recovery in _execute_full_scrape handles it too.
+            # past the 2-arg check in _execute_full_scrape and propagate
+            # uncaught -- raise the same 2-arg shape as the "not JSON at all"
+            # case so the HTML-fallback recovery handles it too.
             raise ValueError(f"Malformed JSON response from page {page}: {e}", text) from e
+
+    def _fetch_page(self, page: int) -> dict:
+        """Fetch a single JSON page."""
+        return self._parse_page(page, _fetch_with_backoff(self._build_page_url(page)))
+
+    def _fetch_pages(self, pages: list) -> list:
+        """
+        Fetch several JSON pages concurrently. Returns a list aligned with
+        `pages`: the parsed page, or None if that page failed.
+        """
+        texts = _fetch_many_with_backoff([self._build_page_url(p) for p in pages])
+        results = []
+        for page, text in zip(pages, texts):
+            if text is None:
+                logger.warning(f"[Scraper] Page {page} fetch failed")
+                results.append(None)
+                continue
+            try:
+                results.append(self._parse_page(page, text))
+            except ValueError as e:
+                logger.warning(f"[Scraper] Page {page} fetch failed: {e.args[0]}")
+                results.append(None)
+        return results
 
     # ── Product parsing ──────────────────────────────────────────────────────
 
@@ -314,7 +241,6 @@ class GeMCategoryScraper:
         if price <= 0:
             return None
 
-        catalogue_id = str(cat.get("id", ""))
         seller_info = cat.get("seller", {})
 
         # Build product URL from the url parts array
@@ -323,27 +249,8 @@ class GeMCategoryScraper:
         if url_parts and len(url_parts) >= 3:
             product_url = f"https://mkp.gem.gov.in/{'/'.join(url_parts)}"
 
-        # Extract inline golden_params from all possible spec fields
-        golden_params = {}
-        for key in ("specifications", "product_specifications", "spec_params",
-                     "params", "attributes", "properties", "features"):
-            items = cat.get(key, [])
-            if isinstance(items, list):
-                for item in items:
-                    if isinstance(item, dict):
-                        name = (item.get("name") or item.get("key") or
-                                item.get("label") or item.get("param_name") or "")
-                        value = (item.get("value") or item.get("val") or
-                                 item.get("param_value") or "")
-                        if name and value and len(str(value)) < 200:
-                            golden_params[str(name).strip()] = str(value).strip()
-            elif isinstance(items, dict):
-                for name, value in items.items():
-                    if name and value and len(str(value)) < 200:
-                        golden_params[str(name).strip()] = str(value).strip()
-
         return {
-            "catalogue_id": catalogue_id,
+            "catalogue_id": str(cat.get("id", "")),
             "price": price,
             "name": cat.get("title", ""),
             "brand": cat.get("brand", ""),
@@ -351,7 +258,7 @@ class GeMCategoryScraper:
             "seller_name": seller_info.get("name", ""),
             "oem_id": str(cat.get("oem_id", "")),
             "product_url": product_url,
-            "golden_params": golden_params,
+            "golden_params": extract_inline_specs(cat),
         }
 
     # ── Deduplication ────────────────────────────────────────────────────────
@@ -457,16 +364,10 @@ class GeMCategoryScraper:
         # ── Page 1 ───────────────────────────────────────────────────────────
         try:
             data1 = self._fetch_page(1)
-            is_html = False
         except ValueError as e:
             if len(e.args) >= 2 and isinstance(e.args[1], str):
-                html_text = e.args[1]
-                is_html = True
-            else:
-                raise
-
-        if is_html:
-            return self._scrape_html_fallback(html_text, stats)
+                return self._scrape_html_fallback(e.args[1], stats)
+            raise
 
         stats["pages_fetched"] += 1
 
@@ -512,7 +413,10 @@ class GeMCategoryScraper:
             stats["duplicates_removed"] = len(all_raw) - len(products)
             return products, stats
 
-        # ── Remaining pages with drift detection ─────────────────────────────
+        # ── Remaining pages, in concurrent batches, with drift detection ─────
+        # Each batch is processed in page order, so drift restarts, the empty-
+        # page terminator and max_price early stopping behave exactly as they
+        # would walking pages one at a time.
         restart_count = 0
         page = 2
 
@@ -523,70 +427,73 @@ class GeMCategoryScraper:
                     f"(drift: {total_count} products)"
                 )
 
-            try:
-                data = self._fetch_page(page)
+            batch = list(range(page, min(page + self.PAGE_BATCH_SIZE, total_pages + 1)))
+            restarted = finished = False
+
+            for pg, data in zip(batch, self._fetch_pages(batch)):
+                # Failure Mode 5: a failed page is skipped (the completeness
+                # check catches real gaps); a failed last page just ends the scrape
+                if data is None:
+                    continue
                 stats["pages_fetched"] += 1
-            except Exception as e:
-                logger.warning(f"[Scraper] Page {page} fetch failed: {e}")
-                # Failure Mode 5: last page failing is acceptable termination
-                if page >= total_pages:
+
+                # Failure Mode 1: Offset drift detection
+                new_total = data.get("number_of_results", total_count)
+                if new_total != total_count:
+                    logger.warning(
+                        f"[Scraper] DRIFT: total {total_count} -> {new_total} "
+                        f"at page {pg}. Restart #{restart_count + 1}."
+                    )
+                    restart_count += 1
+                    stats["restarts"] = restart_count
+
+                    # Full restart from page 1
+                    all_raw.clear()
+                    data1 = self._fetch_page(1)
+                    stats["pages_fetched"] += 1
+                    total_count = data1.get("number_of_results", total_count)
+                    stats["total_count"] = total_count
+                    stats["_raw_facets"] = data1.get("facets", {})
+
+                    for cat in data1.get("catalogs", []):
+                        p = self._parse_product(cat)
+                        if p:
+                            all_raw.append(p)
+
+                    per_page_new = max(len(data1.get("catalogs", [])), 10)
+                    total_pages = max(1, math.ceil(total_count / per_page_new))
+                    total_pages = min(total_pages, self.MAX_PAGES)
+                    restarted = True
                     break
-                page += 1
-                continue
 
-            # Failure Mode 1: Offset drift detection
-            new_total = data.get("number_of_results", total_count)
-            if new_total != total_count:
-                logger.warning(
-                    f"[Scraper] DRIFT: total {total_count} -> {new_total} "
-                    f"at page {page}. Restart #{restart_count + 1}."
-                )
-                restart_count += 1
-                stats["restarts"] = restart_count
+                page_catalogs = data.get("catalogs", [])
 
-                # Full restart from page 1
-                all_raw.clear()
-                data1 = self._fetch_page(1)
-                stats["pages_fetched"] += 1
-                total_count = data1.get("number_of_results", total_count)
-                stats["total_count"] = total_count
-                stats["_raw_facets"] = data1.get("facets", {})
+                # Failure Mode 5: empty page = end of data (not an error)
+                if not page_catalogs:
+                    finished = True
+                    break
 
-                for cat in data1.get("catalogs", []):
+                current_page_prices = []
+                for cat in page_catalogs:
                     p = self._parse_product(cat)
                     if p:
                         all_raw.append(p)
+                        current_page_prices.append(p["price"])
 
-                per_page_new = max(len(data1.get("catalogs", [])), 10)
-                total_pages = max(1, math.ceil(total_count / per_page_new))
-                total_pages = min(total_pages, self.MAX_PAGES)
-                page = 2
-                continue
+                # Early stopping check in pagination loop
+                if self._max_price is not None and current_page_prices:
+                    if min(current_page_prices) > self._max_price:
+                        self._early_stopped = True
+                        logger.info(
+                            f"[Scraper] Early stopping at page {pg} because minimum page price "
+                            f"Rs. {min(current_page_prices):,} exceeds max_price Rs. {self._max_price:,}"
+                        )
+                        finished = True
+                        break
 
-            page_catalogs = data.get("catalogs", [])
-
-            # Failure Mode 5: empty page = end of data (not an error)
-            if not page_catalogs:
+            if finished:
                 break
-
-            current_page_prices = []
-            for cat in page_catalogs:
-                p = self._parse_product(cat)
-                if p:
-                    all_raw.append(p)
-                    current_page_prices.append(p["price"])
-
-            # Early stopping check in pagination loop
-            if self._max_price is not None and current_page_prices:
-                if min(current_page_prices) > self._max_price:
-                    self._early_stopped = True
-                    logger.info(
-                        f"[Scraper] Early stopping at page {page} because minimum page price "
-                        f"Rs. {min(current_page_prices):,} exceeds max_price Rs. {self._max_price:,}"
-                    )
-                    break
-
-            page += 1
+            page = 2 if restarted else batch[-1] + 1
 
         # Failure Mode 4: deduplicate
         products = self._deduplicate(all_raw)
@@ -595,10 +502,8 @@ class GeMCategoryScraper:
         return products, stats
 
     def _scrape_html_fallback(self, html_text: str, stats: dict) -> tuple:
-        from bs4 import BeautifulSoup
-        import re
-        soup = BeautifulSoup(html_text, "html.parser")
-        
+        soup = BeautifulSoup(html_text, HTML_PARSER)
+
         products = []
         cards = soup.select(
             "#search-result-items li, "
@@ -610,7 +515,7 @@ class GeMCategoryScraper:
             ".product-tuple, "
             ".product-grid-item"
         )
-        
+
         if not cards:
             links = soup.find_all("a", href=re.compile(r'/p-\d+-\d+-cat\.html'))
             seen_parents = set()
@@ -631,39 +536,37 @@ class GeMCategoryScraper:
                     link_el = card.find('a', href=re.compile(r'/p-\d+-\d+-cat\.html'))
                 if not link_el:
                     continue
-                
+
                 href = link_el.get("href", "")
                 product_url = href if href.startswith("http") else f"https://mkp.gem.gov.in{href}"
-                
+
                 m = re.search(r'/p-(\d+)-(\d+)-cat\.html', product_url)
-                if m:
-                    catalog_id = m.group(1)
-                    variant_id = f"{catalog_id}-{m.group(2)}"
-                else:
+                if not m:
                     continue
+                variant_id = f"{m.group(1)}-{m.group(2)}"
 
                 name_el = card.select_one('.product-title, .title, .product-name, h5, h4, [class*="title"]')
                 if not name_el:
                     name_el = link_el
                 name = name_el.get_text(strip=True) if name_el else ""
                 name = re.sub(r'([A-Z\s]+)\1', r'\1', name).strip()
-                
+
                 price = 0
                 price_el = card.select_one('.final-price, .price, .offer_price, .our_price, [class*="price"]')
                 if price_el:
-                    price = self._parse_price_text(price_el.get_text(strip=True)) or 0
+                    price = parse_price(price_el.get_text(strip=True)) or 0
 
                 if price <= 0:
                     continue
 
                 brand_el = card.select_one('.brand, .brand-name, [class*="brand"]')
                 brand = brand_el.get_text(strip=True) if brand_el else ""
-                
+
                 seller_el = card.select_one('.seller-name, .seller, .sold-by')
                 if not seller_el:
                     seller_el = card.select_one('[class*="seller-name"], [class*="sold-by"]')
                 seller = seller_el.get_text(strip=True) if seller_el else ""
-                
+
                 # Specs
                 golden_params = {}
                 for li in card.select('ul.specs-list li, .specs li, .specifications li, .attributes li'):
@@ -699,37 +602,32 @@ class GeMCategoryScraper:
                 filter_name = title_el.get_text(strip=True).replace(":", "").strip()
                 if not filter_name or len(filter_name) > 80:
                     continue
-                
-                filter_key = block.get('id') or block.get('data-facet') or self._to_key(filter_name)
-                
-                # Extract options
-                vals = []
+
+                filter_key = block.get('id') or block.get('data-facet') or to_key(filter_name)
+
+                # Extract options (skip parent containers that hold other matches)
                 val_elements = block.select('label, .facet-values li, [class*="option"], [class*="value"]')
-                leaf_elements = []
-                for el in val_elements:
-                    is_parent = False
-                    for other in val_elements:
-                        if other is not el and other in el.descendants:
-                            is_parent = True
-                            break
-                    if not is_parent:
-                        leaf_elements.append(el)
-                        
+                leaf_elements = [
+                    el for el in val_elements
+                    if not any(other is not el and other in el.descendants for other in val_elements)
+                ]
+
+                vals = []
                 for val_el in leaf_elements:
                     val_text = val_el.get_text(strip=True)
                     val_text = re.sub(r'\s*\(\d+\)\s*$', '', val_text).strip()
                     if val_text and val_text.lower() not in ("true", "false", "null", "all", ""):
                         if val_text not in vals:
                             vals.append(val_text)
-                
+
                 if not vals:
                     continue
-                
+
                 is_golden = 'golden' in block.get('class', []) or 'golden' in title_el.get('class', [])
                 if not is_golden:
                     name_lower = filter_name.lower()
                     is_golden = any(k in name_lower for k in ("make in india", "mse", "startup", "pac"))
-                
+
                 # Map back to facet structure
                 facet_entry = {
                     "name": filter_name,
@@ -752,31 +650,17 @@ class GeMCategoryScraper:
             for fname, vals in filter_values.items():
                 raw_facets["product specifications"]["facet_list"].append({
                     "name": fname,
-                    "code": self._to_key(fname),
+                    "code": to_key(fname),
                     "css_class": "golden",
                     "type": "spec",
-                    "facet_values": [{"name": v, "value": v} for v in sorted(list(vals))]
+                    "facet_values": [{"name": v, "value": v} for v in sorted(vals)]
                 })
 
         stats["_raw_facets"] = raw_facets
         stats["total_count"] = len(products)
         stats["duplicates_removed"] = 0
-        
+
         return self._deduplicate(products), stats
-
-    def _parse_price_text(self, text: str) -> int | None:
-        cleaned = re.sub(r'[₹,\s]', '', text)
-        cleaned = re.sub(r'(?i)INR|Rs\.?', '', cleaned)
-        m = re.search(r'(\d+(?:\.\d+)?)', cleaned)
-        if m:
-            val = float(m.group(1))
-            if 10 <= val <= 10_000_000:
-                return int(val)
-        return None
-
-    def _to_key(self, name: str) -> str:
-        key = re.sub(r'[^a-z0-9\s]', '', name.lower().strip())
-        return re.sub(r'\s+', '_', key).strip('_')[:40]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -794,12 +678,10 @@ class GeMFilterScraper:
 
     def __init__(
         self,
-        session: requests.Session,
         category_url: str,
         active_filters: Optional[dict] = None,
         fragment_params: Optional[dict] = None,
     ):
-        self._session = session
         self._base_url = _clean_category_url(category_url)
         self._active_filters = dict(active_filters or {})
         self._fragment_params = dict(fragment_params or {})
@@ -827,7 +709,7 @@ class GeMFilterScraper:
 
         for attempt in range(_MAX_FETCH_RETRIES):
             try:
-                text = _fetch_with_backoff(self._session, url).strip()
+                text = _fetch_with_backoff(url).strip()
                 if text.startswith("{"):
                     data = json.loads(text)
                     return self.scrape_filters_from_facets(data.get("facets", {}), products, my_specs)
@@ -852,30 +734,29 @@ class GeMFilterScraper:
         from the products' golden_params or my_specs.
         """
         filters = self._extract_golden_filters(raw_facets)
-        
-        # Populate from my_specs (Level 2.1)
-        if my_specs:
-            for spec_name, spec_val in my_specs.items():
+
+        code_by_name = {}
+        for code, info in filters.items():
+            code_by_name.setdefault(info["name"], code)
+        seen_values = {code: set(info["values"]) for code, info in filters.items()}
+        resolve_name = make_name_resolver(code_by_name)
+
+        def add_spec_values(specs: dict):
+            for spec_name, spec_val in specs.items():
                 if not spec_val or len(spec_val) > 150:
                     continue
-                for code, info in filters.items():
-                    if _names_match(spec_name, info["name"]):
-                        if spec_val not in info["values"]:
-                            info["values"].append(spec_val)
-                        break
+                filter_name = resolve_name(spec_name)
+                if filter_name:
+                    code = code_by_name[filter_name]
+                    if spec_val not in seen_values[code]:
+                        seen_values[code].add(spec_val)
+                        filters[code]["values"].append(spec_val)
 
-        # Populate from products' golden_params (Level 2.2)
-        if products:
-            for p in products:
-                golden_params = p.get("golden_params", {})
-                for spec_name, spec_val in golden_params.items():
-                    if not spec_val or len(spec_val) > 150:
-                        continue
-                    for code, info in filters.items():
-                        if _names_match(spec_name, info["name"]):
-                            if spec_val not in info["values"]:
-                                info["values"].append(spec_val)
-                            break
+        # Populate from my_specs (Level 2.1), then products' golden_params (Level 2.2)
+        if my_specs:
+            add_spec_values(my_specs)
+        for p in products or []:
+            add_spec_values(p.get("golden_params", {}))
 
         # Filter out filters that still have no values
         return {code: info for code, info in filters.items() if info["values"]}
@@ -889,14 +770,13 @@ class GeMFilterScraper:
             section = facets.get(section_key, {})
             for facet in section.get("facet_list", []):
                 code = facet.get("code", "")
-                css_class = facet.get("css_class", "")
                 name = facet.get("name", "")
 
                 if len(name) > 80:
                     continue
 
                 # Determine if golden
-                is_golden = css_class == "golden"
+                is_golden = facet.get("css_class", "") == "golden"
                 if not is_golden:
                     name_lower = name.lower()
                     is_golden = any(
@@ -911,35 +791,12 @@ class GeMFilterScraper:
                 if code == "mse_applicable":
                     continue
 
-                values = GeMFilterScraper._pull_values(facet)
                 result[code] = {
                     "name": name,
-                    "values": values,
+                    "values": pull_facet_values(facet),
                 }
 
         return result
-
-    @staticmethod
-    def _pull_values(facet: dict) -> list:
-        """Extract option values from a facet entry."""
-        for key in ("facet_values", "topValues", "top_values", "values",
-                     "entries", "options", "items", "terms"):
-            raw = facet.get(key, [])
-            if not raw:
-                continue
-            vals = []
-            for v in raw:
-                if isinstance(v, dict):
-                    label = (v.get("name") or v.get("value") or
-                             v.get("code") or v.get("label") or "")
-                else:
-                    label = str(v)
-                label = str(label).strip()
-                if label and label.lower() not in ("true", "false", "null", ""):
-                    vals.append(label)
-            if vals:
-                return vals
-        return []
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -975,7 +832,6 @@ class L1ChainSurpasser:
         self._my_catalogue_id = str(my_catalogue_id)
         self._my_price = my_price
 
-        self._session = _create_session()
         self._active_filters: dict = {}
         self._iteration_log: list = []
         self._api_calls = 0
@@ -987,32 +843,10 @@ class L1ChainSurpasser:
         """
         Fetch my product's detail page and extract its specifications.
         """
-        from bs4 import BeautifulSoup
         logger.info(f"[L1Surpass] Fetching my product specs from {product_url}...")
         try:
-            html = _fetch_with_backoff(self._session, product_url)
-            soup = BeautifulSoup(html, "html.parser")
-            
-            specs = {}
-            feature_groups = soup.select_one("#feature_groups")
-            if feature_groups:
-                for table in feature_groups.find_all("table"):
-                    for row in table.find_all("tr"):
-                        cells = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
-                        if len(cells) >= 2 and cells[0] and cells[1]:
-                            specs[cells[0].strip()] = cells[1].strip()
-
-            specs_div = soup.select_one(".specifications")
-            if specs_div:
-                for pc in specs_div.select(".param-container"):
-                    key_el = pc.select_one(".key_name")
-                    val_el = pc.select_one(".key_value")
-                    if key_el and val_el:
-                        name = key_el.get_text(strip=True)
-                        val = val_el.get_text(strip=True)
-                        if name and val and name not in specs:
-                            specs[name] = val
-                            
+            html = _fetch_with_backoff(product_url)
+            specs = extract_specs_from_soup(BeautifulSoup(html, HTML_PARSER))
             logger.info(f"[L1Surpass] Successfully extracted {len(specs)} specs for my product.")
             return specs
         except Exception as e:
@@ -1046,7 +880,7 @@ class L1ChainSurpasser:
 
             # ── Step 1: Full scrape with current filters ─────────────────────
             scraper = GeMCategoryScraper(
-                self._session, self._base_url,
+                self._base_url,
                 self._active_filters, self._my_catalogue_id,
                 self._fragment_params,
                 max_price=self._my_price,
@@ -1083,12 +917,12 @@ class L1ChainSurpasser:
                 )
 
             # ── Step 2: Find current L1 blocker ──────────────────────────────
-            current_L1 = None
-            for p in products:
-                if p["price"] < self._my_price:
-                    if not _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"]):
-                        current_L1 = p
-                        break
+            current_L1 = next(
+                (p for p in products
+                 if p["price"] < self._my_price
+                 and not _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"])),
+                None,
+            )
 
             if current_L1 is None:
                 # I AM L1!
@@ -1110,18 +944,13 @@ class L1ChainSurpasser:
 
             # ── Step 3: Get live filter options ──────────────────────────────
             # Reuse facets from the scrape if available (saves 1 API call)
+            filter_scraper = GeMFilterScraper(
+                self._base_url, self._active_filters, self._fragment_params,
+            )
             raw_facets = full_data["scrape_stats"].get("_raw_facets", {})
             if raw_facets:
-                filter_scraper = GeMFilterScraper(
-                    self._session, self._base_url,
-                    self._active_filters, self._fragment_params,
-                )
                 filter_options = filter_scraper.scrape_filters_from_facets(raw_facets, products, self._my_specs)
             else:
-                filter_scraper = GeMFilterScraper(
-                    self._session, self._base_url,
-                    self._active_filters, self._fragment_params,
-                )
                 filter_options = filter_scraper.scrape_filters(products, self._my_specs)
                 self._api_calls += 1
 
@@ -1229,11 +1058,11 @@ class L1ChainSurpasser:
                 continue  # already applied
 
             # Check if my product has a value for this filter
-            my_val = None
-            for param_name, param_val in my_golden.items():
-                if _names_match(param_name, info["name"]):
-                    my_val = param_val
-                    break
+            my_val = next(
+                (param_val for param_name, param_val in my_golden.items()
+                 if _names_match(param_name, info["name"])),
+                None,
+            )
 
             # My value goes first
             if my_val and my_val in info["values"]:
@@ -1331,12 +1160,11 @@ class L1ChainSurpasser:
             for val in info["values"][:3]:
                 unused.append((code, info["name"], val))
 
-        # Generate 2-combinations, skip pairs from the same filter key
-        combos = [
-            (a, b) for a, b in itertools.combinations(unused, 2)
-            if a[0] != b[0]
-        ]
-        combos = combos[:50]  # hard cap
+        # Generate 2-combinations, skip pairs from the same filter key (hard cap 50)
+        combos = list(itertools.islice(
+            ((a, b) for a, b in itertools.combinations(unused, 2) if a[0] != b[0]),
+            50,
+        ))
 
         if not combos:
             return False
@@ -1402,7 +1230,7 @@ class L1ChainSurpasser:
         No partial scrapes, no reuse of previous pages.
         """
         scraper = GeMCategoryScraper(
-            self._session, self._base_url,
+            self._base_url,
             tentative_filters, self._my_catalogue_id,
             self._fragment_params,
             max_price=self._my_price,
@@ -1456,16 +1284,13 @@ class L1ChainSurpasser:
             return {"status": "not_eliminated", "scrape_stats": stats}
 
         # SUCCESS: L1 is gone. Find the new L1.
-        new_L1 = None
-        for p in products:
-            if p["price"] < self._my_price:
-                if not _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"]):
-                    new_L1 = {
-                        "catalogue_id": p["catalogue_id"],
-                        "price": p["price"],
-                        "name": p.get("name", ""),
-                    }
-                    break
+        new_L1 = next(
+            ({"catalogue_id": p["catalogue_id"], "price": p["price"], "name": p.get("name", "")}
+             for p in products
+             if p["price"] < self._my_price
+             and not _catalogue_id_matches(self._my_catalogue_id, p["catalogue_id"])),
+            None,
+        )
 
         return {
             "status": "l1_eliminated",
@@ -1529,7 +1354,7 @@ def main():
     )
 
     print(f"\n{'=' * 80}")
-    print(f"L1 CHAIN SURPASSER")
+    print("L1 CHAIN SURPASSER")
     print(f"{'=' * 80}")
     print(f"  Category:     {category_url}")
     print(f"  My Catalogue: {my_catalogue_id}")

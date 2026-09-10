@@ -41,11 +41,11 @@ def check(name, condition):
     else:
         FAIL += 1
         print(f"  FAIL: {name}")
+    assert condition, name
 
 
 def make_category_scraper():
     return GeMCategoryScraper(
-        session=None,  # never touched -- _fetch_with_backoff is monkeypatched
         category_url="https://mkp.gem.gov.in/some-category/search",
         my_catalogue_id="5116877-99999999999",
     )
@@ -58,7 +58,7 @@ def test_malformed_json_degrades_gracefully_not_uncaught():
     cat_scraper = make_category_scraper()
 
     original_fetch = l1_surpasser._fetch_with_backoff
-    l1_surpasser._fetch_with_backoff = lambda session, url: '{"number_of_results": 5, "catalogs": [tr'
+    l1_surpasser._fetch_with_backoff = lambda url: '{"number_of_results": 5, "catalogs": [tr'
     try:
         raised_value_error = False
         args_shape_ok = False
@@ -84,7 +84,7 @@ def test_execute_full_scrape_does_not_crash_on_malformed_json():
     cat_scraper = make_category_scraper()
 
     original_fetch = l1_surpasser._fetch_with_backoff
-    l1_surpasser._fetch_with_backoff = lambda session, url: '{"number_of_results": 5, "catalogs": [tr'
+    l1_surpasser._fetch_with_backoff = lambda url: '{"number_of_results": 5, "catalogs": [tr'
     # Stub the HTML fallback itself -- its own parsing correctness isn't
     # what this test is about; we're proving the exception gets routed
     # there instead of escaping uncaught.

@@ -1,176 +1,45 @@
 """
-GeMScraper — scrapes GeM marketplace using their internal JSON API.
-Supports both product detail page URLs and category listing URLs.
-No browser needed — uses requests + BeautifulSoup.
+GeMScraper — chain-hunt and surgical-strike engine over GeM's search JSON API.
+
+All network I/O goes through crawler.BrowserManager (a shared Playwright
+browser), because GeM's WAF blocks plain `requests` calls. Category-listing
+scrapes for /api/scrape live in crawler.GeMCrawler.
 """
-import re
 import json
 import time
-import random
 import logging
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse, urlencode
+
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs, urlencode, urldefrag
+
+from gem_utils import (
+    HTML_PARSER,
+    build_product_url,
+    extract_inline_specs,
+    extract_specs_from_soup,
+    make_name_resolver,
+    names_match,
+    normalize_filter_value,
+    parse_fragment_params,
+    parse_price,
+    pull_facet_values,
+    to_key,
+)
 
 logger = logging.getLogger("gem-optimizer")
 
+
 class GeMScraper:
-    # Global class-level semaphore ensures no more than 8 concurrent HTTP requests 
-    # are sent to GeM's network ANYWHERE in the entire backend application loop,
-    # completely insulating our server from firing Firewall-banning spikes.
-    _HTTP_SEMAPHORE = threading.BoundedSemaphore(8)
-    _COOKIE_LOCK = threading.Lock()
-    # Class-level (not instance-level) so the 30s refresh throttle actually
-    # engages across requests -- main.py creates a fresh GeMScraper() per
-    # request, so an instance attribute here would always start unset and
-    # never throttle anything. The cookies themselves are cached here too
-    # so a throttled (skipped-refresh) instance still gets a valid,
-    # cookied session instead of an empty one.
-    _last_cookie_refresh_time: float | None = None
-    _cached_cookies: list = []
-
-    HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Cache-Control": "max-age=0",
-    }
-
-    # All 36 Indian States and Union Territories (for location filtering)
-    INDIAN_STATES = [
-        "Andaman and Nicobar Islands",
-        "Andhra Pradesh",
-        "Arunachal Pradesh",
-        "Assam",
-        "Bihar",
-        "Chandigarh",
-        "Chhattisgarh",
-        "Dadra and Nagar Haveli and Daman and Diu",
-        "Delhi",
-        "Goa",
-        "Gujarat",
-        "Haryana",
-        "Himachal Pradesh",
-        "Jammu and Kashmir",
-        "Jharkhand",
-        "Karnataka",
-        "Kerala",
-        "Ladakh",
-        "Lakshadweep",
-        "Madhya Pradesh",
-        "Maharashtra",
-        "Manipur",
-        "Meghalaya",
-        "Mizoram",
-        "Nagaland",
-        "Odisha",
-        "Puducherry",
-        "Punjab",
-        "Rajasthan",
-        "Sikkim",
-        "Tamil Nadu",
-        "Telangana",
-        "Tripura",
-        "Uttar Pradesh",
-        "Uttarakhand",
-        "West Bengal",
-    ]
-
-    # Configuration
-    MAX_JSON_PAGES = 2000        # Fetch up to 2000 pages (covers ~24,000 products)
-    MAX_ENRICH = 20              # Enrich max 20 products for missing specs
-    ENRICH_WORKERS = 20          # Parallel workers for spec fetching
-    MAX_FILTERS = 10             # Max non-golden filters to return (all golden filters always returned)
-    MAX_COMBO_DEPTH = 10         # Explore golden filter combos up to 10 levels deep
-    MAX_API_CALLS = 500          # Safety ceiling: stop exploration after this many re-scrapes
 
     def __init__(self):
-        self._session = requests.Session()
-        self._session.headers.update(self.HEADERS)
         self._product_specs_cache = {}
-        
-        # Configure robust retry strategy for connection timeouts and server errors
-        retry_strategy = Retry(
-            total=5,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS"]
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self._session.mount("https://", adapter)
-        self._session.mount("http://", adapter)
-        
-        self._initialize_session()
 
-    def _apply_cookies(self, cookies: list):
-        """Load a list of Playwright cookie dicts into this instance's requests session."""
-        self._session.cookies.clear()
-        for cookie in cookies:
-            self._session.cookies.set(
-                cookie["name"],
-                cookie["value"],
-                domain=cookie["domain"],
-                path=cookie["path"]
-            )
-
-    def _refresh_session_cookies_with_playwright(self):
-        """Launch headless Playwright browser to establish valid session cookies on GeM."""
-        with GeMScraper._COOKIE_LOCK:
-            now = time.time()
-            if (GeMScraper._last_cookie_refresh_time is not None
-                    and now - GeMScraper._last_cookie_refresh_time < 30
-                    and GeMScraper._cached_cookies):
-                logger.info("[Playwright] Cookies were refreshed recently, reusing cached session cookies.")
-                self._apply_cookies(GeMScraper._cached_cookies)
-                return True
-
-            logger.info("[Playwright] Refreshing session cookies via headless Chromium...")
-            try:
-                from playwright.sync_api import sync_playwright
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(headless=True)
-                    context = browser.new_context(
-                        user_agent=self.HEADERS["User-Agent"]
-                    )
-                    page = context.new_page()
-                    page.goto("https://mkp.gem.gov.in/", timeout=30000)
-
-                    # Extract cookies
-                    cookies = context.cookies()
-                    browser.close()
-
-                self._apply_cookies(cookies)
-                GeMScraper._cached_cookies = cookies
-                GeMScraper._last_cookie_refresh_time = now
-                logger.info(f"[Playwright] Successfully loaded {len(cookies)} cookies into requests session.")
-                return True
-            except Exception as e:
-                logger.error(f"[Playwright] Failed to refresh cookies: {e}")
-                return False
-
-    def _initialize_session(self):
-        """Establish initial session cookies to prevent GeM from redirecting to homepage."""
-        self._refresh_session_cookies_with_playwright()
-
-    def __del__(self):
-        try:
-            self._session.close()
-        except Exception:
-            pass
+    # Shared helpers, exposed as methods because chain_hunt.py's functions
+    # are bound onto this class and call them through `self`.
+    _names_match = staticmethod(names_match)
+    _to_key = staticmethod(to_key)
+    _build_product_url = staticmethod(build_product_url)
+    _extract_inline_specs = staticmethod(extract_inline_specs)
 
     def _normalize_url(self, url: str) -> tuple[str, dict]:
         """
@@ -180,728 +49,84 @@ class GeMScraper:
         Returns (clean_base_url, extra_query_params_dict)
         """
         url = url.strip()
-
-        # Auto-prepend https:// if missing
         if not url.startswith("http://") and not url.startswith("https://"):
             url = "https://" + url
 
-        # Parse fragment-based query params (e.g. search#/?q=PC%20Software&...)
         parsed = urlparse(url)
-        extra_params = {}
-
-        if parsed.fragment:
-            frag = parsed.fragment
-            # Strip leading /? or ? from fragment to get query string
-            if frag.startswith("/?"):
-                frag_qs = frag[2:]
-            elif frag.startswith("?"):
-                frag_qs = frag[1:]
-            elif "?" in frag:
-                frag_qs = frag.split("?", 1)[1]
-            else:
-                frag_qs = frag
-
-            frag_params = parse_qs(frag_qs, keep_blank_values=True)
-            for k, v_list in frag_params.items():
-                # Flatten single-value lists
-                extra_params[k] = v_list[0] if len(v_list) == 1 else v_list
-
-        # Build clean base URL (without fragment and without existing query)
+        extra_params = parse_fragment_params(parsed.fragment)
         clean_url = parsed._replace(fragment="", query="").geturl()
-
         return clean_url, extra_params
 
-    def scrape(self, url: str, location: str = "") -> dict:
+    # ── FAST PRICE SCRAPE ────────────────────────────────────────────────────
+
+    def _fast_price_scrape(self, url: str, extra_params: dict, location: str) -> dict:
         """
-        Main entry point. Accepts either:
-          - A product page URL (p-XXXXX-YYYYY-cat.html)
-          - A category/search URL (including fragment-based query URLs)
-        Returns {filters, products, url, productCount, filterCount, yourProduct, location}
-        """
-        url = url.strip()
-        your_product = None
+        Min price and total result count for a filtered category listing.
 
-        # Normalize URL: auto-prepend https://, extract fragment-based query params
-        url, extra_params = self._normalize_url(url)
-
-        # Detect if this is a product detail page
-        product_match = re.search(r'/p-(\d+)-(\d+)-cat\.html', url)
-        if product_match:
-            catalog_id = product_match.group(1)
-            variant_id = f"{catalog_id}-{product_match.group(2)}"
-            your_product = self._scrape_product_page(url, variant_id)
-            category_url = self._find_category_url(url, catalog_id)
-            if category_url:
-                url = category_url
-            else:
-                return {
-                    "filters": [],
-                    "products": [],
-                    "url": url,
-                    "productCount": 0,
-                    "filterCount": 0,
-                    "yourProduct": your_product,
-                    "location": location or "All India",
-                    "error": "Could not determine the category listing. Try using a category search URL instead.",
-                }
-
-        result = self._scrape_category_listing(url, extra_params, location)
-        result["yourProduct"] = your_product
-        return result
-
-    def scrape_with_filters(self, url: str, selected_filters: list, location: str = "") -> dict:
-        """
-        Re-scrape a category listing with specific golden filters applied.
-        selected_filters: [{"filterKey": "code", "value": "Yes"}, ...]
-        GeM's JSON API supports facet params like &facet_code=value.
-        Returns the same structure as scrape() but with filtered results.
-        """
-        url = url.strip()
-        url, extra_params = self._normalize_url(url)
-
-        # Merge selected filters into extra_params
-        if extra_params is None:
-            extra_params = {}
-        for sf in selected_filters:
-            extra_params[sf["filterKey"]] = sf["value"]
-
-        result = self._scrape_category_listing(url, extra_params, location)
-        result["appliedFilters"] = selected_filters
-        return result
-    def find_l1_combinations(
-        self,
-        url: str,
-        seller_price: int,
-        golden_filters: list,
-        location: str = "",
-        max_depth: int = None,
-        min_depth: int = 3,
-        mandatory_filters: list = None,
-        max_api_calls: int = None,
-    ) -> dict:
-        """
-        Cascading L1 finder.
-
-        KEY DESIGN DECISIONS:
-        - golden_filters come from the initial /scrape (no re-enrichment needed)
-        - Each cascade step uses _fast_price_scrape: fetches all listing pages in
-          parallel (NO product detail page visits) to get the true min price fast
-        - Remaining golden filters = initial set MINUS already-applied keys
-          (GeM never adds NEW golden filters when you narrow — it only removes the
-           ones you've already applied, so re-discovery is never needed)
-        - Results sorted deepest-first (most filters = most specific niche)
-        """
-        if max_api_calls is None:
-            max_api_calls = self.MAX_API_CALLS
-
-        url = url.strip()
-        url, base_extra = self._normalize_url(url)
-
-        # Only work with golden filters that have at least 2 values
-        golden_filters = [
-            f for f in golden_filters
-            if f.get("isGolden") and len(f.get("values", [])) >= 1
-        ]
-
-        if not golden_filters:
-            return {
-                "combinations": [],
-                "totalScraped": 0,
-                "progress": ["No golden filters found — cannot cascade."],
-                "truncated": False,
-                "goldenFilterCount": 0,
-            }
-
-        # Dynamic depth = number of golden filters (no hardcoded cap)
-        if max_depth is None:
-            max_depth = len(golden_filters)
-        
-        # ── Tunneling Mode for Ultra Deep Searches (11+) ──
-        tunnel_mode = True if (min_depth and min_depth >= 11) else False
-
-        if tunnel_mode:
-            # Shuffle randomly to explore DIFFERENT vertical combinations on repeated clicks
-            random.shuffle(golden_filters)
-        else:
-            # Sort by fewest-values first to maximize vertical reach efficiently
-            golden_filters.sort(key=lambda f: len(f.get("values", [])))
-
-
-        combinations = []
-        progress_log = []
-        seen_combos = set()
-        scrape_memo = {}
-        api_calls = [0]
-        truncated = [False]
-
-        progress_log.append(
-            f"[Start] {len(golden_filters)} golden filters · "
-            f"Depth {min_depth} to {max_depth} · "
-            f"TunnelMode={tunnel_mode} · seller price ₹{seller_price:,}"
-        )
-
-        def explore(applied: list, depth: int):
-            """Recursively apply one more golden filter, re-scrape for min price."""
-            if depth > max_depth or api_calls[0] >= max_api_calls:
-                if api_calls[0] >= max_api_calls:
-                    truncated[0] = True
-                return
-
-            applied_keys = {f["filterKey"] for f in applied}
-            # Remaining = all golden filters minus already-applied keys
-            available = [g for g in golden_filters if g["filterKey"] not in applied_keys]
-
-            if not available:
-                return
-
-            # Pick ONE random filter to ensure each path explores a unique direction
-            random.shuffle(available)
-            target_filters = available[:1]
-
-            results_at_this_level = []
-            for gf in target_filters:
-                if api_calls[0] >= max_api_calls:
-                    truncated[0] = True
-                    break
-
-                # Try top 2 values to keep branching extremely tight
-                vals = gf.get("values", [])[:2]
-                for val in vals:
-                    if api_calls[0] >= max_api_calls:
-                        truncated[0] = True
-                        break
-
-                    new_filter = {
-                        "filterKey":  gf["filterKey"],
-                        "filterName": gf["filterName"],
-                        "value":      val,
-                        "isGolden":   True,
-                    }
-                    new_applied = applied + [new_filter]
-
-                    # Dedup
-                    sig = tuple(sorted((f["filterKey"], f["value"]) for f in new_applied))
-                    if sig in seen_combos: continue
-                    seen_combos.add(sig)
-
-                    # Build filter params
-                    extra = dict(base_extra) if base_extra else {}
-                    for af in new_applied: extra[af["filterKey"]] = af["value"]
-
-                    combo_label = " + ".join(f'{f["filterName"]}: {f["value"]}' for f in new_applied)
-                    memo_key = tuple(sorted(extra.items()))
-
-                    try:
-                        if memo_key in scrape_memo:
-                            result = scrape_memo[memo_key]
-                        else:
-                            result = self._fast_price_scrape(url, extra, location, seller_price=seller_price)
-                            api_calls[0] += 1
-                            scrape_memo[memo_key] = result
-
-                        min_price      = result["min_price"]
-                        total_in_niche = result["total"]
-                        n_products     = result["product_count"]
-
-                        is_win = (n_products == 0 and total_in_niche == 0) or (min_price is not None and seller_price < min_price)
-                        if is_win:
-                            combinations.append({
-                                "combo":             new_applied,
-                                "label":             combo_label,
-                                "competitorCount":   n_products,
-                                "minCompetitorPrice": min_price,
-                                "sellerPrice":       seller_price,
-                                "priceGap":          (min_price - seller_price) if min_price else 0,
-                                "isUntapped":        n_products == 0,
-                                "hasGolden":         True,
-                                "status":            "WIN",
-                                "competitors":       [],
-                                "depth":             depth,
-                                "totalInNiche":      total_in_niche,
-                            })
-                            progress_log.append(f"  ✅ WIN (depth {depth}): {combo_label}")
-                        else:
-                            progress_log.append(f"  ✗ depth {depth}: min ₹{min_price or 0:,} < ₹{seller_price:,}")
-
-                        results_at_this_level.append({
-                            "applied": new_applied,
-                            "min_price": min_price or 0,
-                            "n_products": n_products
-                        })
-                    except: continue
-
-            # ── Recursion: Always go deeper until max_depth ───────────────────
-            if depth < max_depth and results_at_this_level:
-                # Pick the best value from this level and continue vertically
-                best = max(results_at_this_level, key=lambda x: x["min_price"])
-                explore(best["applied"], depth + 1)
-
-
-        progress_log.append(f"[Cascade] Launching parallel vertical paths to depth {max_depth}...")
-        
-        start_applied = mandatory_filters or []
-        start_depth = len(start_applied) + 1
-        
-        # Launch 16 independent vertical paths to ensure variety and depth coverage
-        for i in range(16):
-            if api_calls[0] >= max_api_calls: break
-            explore(start_applied, start_depth)
-
-
-        # ── Score and sort: deepest first, then largest price gap ─────────────
-        for c in combinations:
-            if c["isUntapped"]:
-                c["score"] = 1000 + c["depth"] * 10
-            else:
-                max_gap   = max(seller_price * 0.8, 1)
-                gap_s     = min(c["priceGap"] / max_gap, 1) * 60
-                scar_s    = max(1 - c["competitorCount"] / 10, 0) * 25
-                depth_s   = c["depth"] * 5
-                c["score"] = round(gap_s + scar_s + depth_s)
-
-        # Filter to only requested depth range
-        combinations = [c for c in combinations if c["depth"] >= min_depth]
-
-        # Deepest first → within same depth, highest score first
-        combinations.sort(key=lambda c: (c["depth"], c["score"]), reverse=True)
-
-        summary = (
-            f"[Done] {len(combinations)} L1 combos found "
-            f"in {api_calls[0]} re-scrapes"
-        )
-        if truncated[0]:
-            summary += f" (capped at {max_api_calls} calls)"
-        progress_log.append(summary)
-
-        return {
-            "combinations":    combinations,
-            "totalScraped":    api_calls[0],
-            "progress":        progress_log,
-            "truncated":       truncated[0],
-            "goldenFilterCount": len(golden_filters),
-        }
-
-    # ── FAST PRICE SCRAPE (no enrichment) ────────────────────────────────────
-
-    def _fast_price_scrape(self, url: str, extra_params: dict, location: str, seller_price: int = None) -> dict:
-        """
-        Fetches ALL category listing pages IN PARALLEL with retry.
-        Returns the true minimum price across every product in the filtered result.
-        No product detail page visits — prices only, ~10-50x faster than full scrape.
+        Requests the listing sorted price-ascending (the same sort_type
+        chain_hunt.py and crawler.py rely on), so page 1 already contains
+        the cheapest product -- one request instead of walking every page.
         """
         base_url = url.split("#")[0].split("?")[0]
         if not base_url.endswith("/search"):
             base_url = base_url.rstrip("/")
 
-        extra_qs = ""
-        if extra_params:
-            filtered = {k: self._normalize_filter_value(v) for k, v in extra_params.items()
-                        if k.lower() not in ("page", "format")}
-            if filtered:
-                extra_qs = "&" + urlencode(filtered)
+        query = {"page": 1, "format": "json", "sort_type": "price_in_asc"}
+        for k, v in (extra_params or {}).items():
+            if k.lower() not in ("page", "format", "sort_type"):
+                query[k] = normalize_filter_value(v)
         if location and location.lower() not in ("", "all india", "all"):
-            extra_qs += "&localized_search=" + requests.utils.quote(location)
+            query["localized_search"] = location
 
-        # Step 1: page 1 — get total count
-        page1_url = f"{base_url}?page=1&format=json{extra_qs}"
         try:
-            text = self._fetch(page1_url).strip()
+            text = self._fetch(f"{base_url}?{urlencode(query)}").strip()
             if not text.startswith("{"):
                 return {"min_price": None, "total": 0, "product_count": 0}
-            data1 = json.loads(text)
+            data = json.loads(text)
         except Exception:
             return {"min_price": None, "total": 0, "product_count": 0}
 
-        total         = data1.get("number_of_results", 0)
-        catalogs1     = data1.get("catalogs", [])
-        per_page      = max(len(catalogs1), 10)
-        total_pages   = max(1, -(-total // per_page))
-        total_pages   = min(total_pages, self.MAX_JSON_PAGES)
-
-        all_prices = [int(c.get("final_price", {}).get("value", 0))
-                      for c in catalogs1
-                      if int(c.get("final_price", {}).get("value", 0)) > 0]
-
-        # Early exit: if we already found a competitor cheaper than or equal to seller_price, we can't win
-        if seller_price is not None and any(p <= seller_price for p in all_prices):
-            return {
-                "min_price":     min(all_prices) if all_prices else None,
-                "total":         total,
-                "product_count": len(all_prices),
-            }
-
-        if total_pages == 1:
-            return {
-                "min_price":     min(all_prices) if all_prices else None,
-                "total":         total,
-                "product_count": len(all_prices),
-            }
-
-        # Step 2: remaining pages, genuinely concurrent (batched so we can
-        # still early-exit as soon as a cheaper competitor turns up, instead
-        # of fetching all — possibly hundreds of — pages up front)
-        pages_left = list(range(2, total_pages + 1))
-        batch_size = 8  # matches BrowserManager's page-pool concurrency ceiling
-        for i in range(0, len(pages_left), batch_size):
-            batch = pages_left[i:i + batch_size]
-            urls = [f"{base_url}?page={pg}&format=json{extra_qs}" for pg in batch]
-            texts = self._fetch_many(urls, retries=3)
-
-            stop = False
-            for t in texts:
-                if not t or not t.strip().startswith("{"):
-                    continue
-                try:
-                    d = json.loads(t)
-                except json.JSONDecodeError:
-                    continue
-                prices = [int(c.get("final_price", {}).get("value", 0))
-                          for c in d.get("catalogs", [])
-                          if int(c.get("final_price", {}).get("value", 0)) > 0]
-                all_prices.extend(prices)
-                if seller_price is not None and any(p <= seller_price for p in prices):
-                    stop = True
-            if stop:
-                break
-
+        prices = [
+            price for c in data.get("catalogs", [])
+            if (price := int(c.get("final_price", {}).get("value", 0))) > 0
+        ]
         return {
-            "min_price":     min(all_prices) if all_prices else None,
-            "total":         total,
-            "product_count": len(all_prices),
+            "min_price":     min(prices) if prices else None,
+            "total":         data.get("number_of_results", 0),
+            "product_count": len(prices),
         }
 
-    # ── PRODUCT DETAIL PAGE ───────────────────────────────────────────────────
-
-    def _scrape_product_page(self, url: str, variant_id: str) -> dict:
-        """Extract product details (name, price, specs) from a product detail page."""
-        html = self._fetch(url)
-        soup = BeautifulSoup(html, "html.parser")
-
-        name = ""
-        h1 = soup.select_one("h1")
-        if h1:
-            name = h1.get_text(strip=True)
-            name = re.sub(r'([A-Z\s]+)\1', r'\1', name).strip()
-
-        price = 0
-        for sel in [".final-price", ".offer_price", ".our_price"]:
-            el = soup.select_one(sel)
-            if el:
-                price = self._parse_price(el.get_text(strip=True))
-                if price:
-                    break
-
-        specs = self._extract_specs_from_page(soup)
-
-        brand_el = soup.select_one(".brand-name")
-        brand = brand_el.get_text(strip=True) if brand_el else ""
-
-        seller = ""
-        seller_el = soup.select_one(".seller-info")
-        if seller_el:
-            sold_as = seller_el.select_one("[class*='sold_as']")
-            if sold_as:
-                seller = sold_as.get_text(strip=True)
-
-        return {
-            "id": variant_id,
-            "name": name[:150],
-            "price": price,
-            "specs": specs,
-            "brand": brand,
-            "seller": seller,
-        }
-
-    # ── FIND CATEGORY URL FROM PRODUCT PAGE ──────────────────────────────────
-
-    def _find_category_url(self, product_url: str, catalog_id: str) -> str | None:
-        """Given a product page URL, find the category listing URL."""
-        html = self._fetch(product_url)
-        soup = BeautifulSoup(html, "html.parser")
-
-        title = soup.select_one("title")
-        if title:
-            title_text = title.get_text(strip=True)
-            terms = re.sub(r'Buy\s+', '', title_text, flags=re.I)
-            terms = re.sub(r'\s*\|.*$', '', terms)
-            terms = re.sub(r'\s*,.*$', '', terms)
-            brand_el = soup.select_one(".brand-name")
-            if brand_el:
-                brand = brand_el.get_text(strip=True)
-                terms = terms.replace(brand, '').strip()
-            terms = re.sub(r'\s+', ' ', terms).strip()
-            words = [w for w in terms.split() if len(w) > 2][:4]
-            search_q = '+'.join(words)
-
-            search_url = f"https://mkp.gem.gov.in/search?q={search_q}&format=json"
-            try:
-                # Use the Playwright-backed bridge, not self._session -- plain
-                # requests calls to GeM are blocked by its WAF (see _fetch's
-                # own docstring), which this function was the one place in
-                # the file that didn't do.
-                text = self._fetch(search_url)
-                soup_search = BeautifulSoup(text, "html.parser")
-                for a in soup_search.find_all("a", href=True):
-                    href = a.get("href", "")
-                    if "/search" in href and href != "/search":
-                        full_url = href if href.startswith("http") else f"https://mkp.gem.gov.in{href}"
-                        test_url = full_url.split("#")[0] + "?format=json"
-                        try:
-                            text2 = self._fetch(test_url).strip()
-                            if text2.startswith("{"):
-                                data = json.loads(text2)
-                                for cat in data.get("catalogs", []):
-                                    if catalog_id in str(cat.get("id", "")):
-                                        return full_url.split("#")[0]
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-        return None
-
-    # ── CATEGORY LISTING (JSON API) ──────────────────────────────────────────
-
-    def _scrape_category_listing(self, url: str, extra_params: dict = None, location: str = "") -> dict:
-        """
-        Scrape ALL products in a GeM category using their JSON API.
-        Strategy:
-          1. Fetch page 1 to get total_results count + facets
-          2. Fetch ALL remaining pages IN PARALLEL (20 workers, retry on failure)
-          3. For each catalog item, try to extract specs from the listing JSON directly
-             (most GeM categories include spec data inline — no product page visit needed)
-          4. Only fall back to product-page enrichment for products where inline specs
-             were missing golden-filter fields
-        """
-        base_url = url.split("#")[0].split("?")[0]
-        if not base_url.endswith("/search"):
-            base_url = base_url.rstrip("/")
-
-        extra_qs = ""
-        if extra_params:
-            filtered = {k: self._normalize_filter_value(v) for k, v in extra_params.items()
-                        if k.lower() not in ("page", "format")}
-            if filtered:
-                extra_qs = "&" + urlencode(filtered)
-        if location and location.lower() not in ("", "all india", "all"):
-            extra_qs += "&localized_search=" + requests.utils.quote(location)
-
-        # ── Step 1: Page 1 — get total count + facets ────────────────────────
-        page1_url = f"{base_url}?page=1&format=json{extra_qs}"
-        text = self._fetch(page1_url).strip()
-        if not text.startswith("{"):
-            if extra_qs:
-                # Fragment params may be client-side; retry bare
-                extra_qs = ""
-                page1_url = f"{base_url}?page=1&format=json"
-                text = self._fetch(page1_url).strip()
-            if not text.startswith("{"):
-                return self._scrape_html_listing(text, url)
-
-        try:
-            data1 = json.loads(text)
-        except json.JSONDecodeError:
-            return self._scrape_html_listing(text, url)
-
-        total_results = data1.get("number_of_results", 0)
-        facet_defs    = self._extract_facet_defs(data1.get("facets", {}))
-        catalogs1     = data1.get("catalogs", [])
-        per_page      = max(len(catalogs1), 10)
-        total_pages   = max(1, -(-total_results // per_page))  # ceiling div
-        total_pages   = min(total_pages, 5)  # Cap initial scrape to 5 pages for extreme speed
-
-        def parse_catalog(cat: dict) -> dict | None:
-            price = int(cat.get("final_price", {}).get("value", 0))
-            if price <= 0:
-                return None
-            product = {
-                "id":         cat.get("id", ""),
-                "name":       cat.get("title", ""),
-                "price":      price,
-                "brand":      cat.get("brand", ""),
-                "seller":     cat.get("seller", {}).get("name", ""),
-                "sellerType": cat.get("seller", {}).get("display_sold_as", ""),
-                "rating":     cat.get("seller", {}).get("rating", ""),
-                "listPrice":  int(cat.get("list_price", {}).get("value", 0)),
-                "discount":   cat.get("discount_percent", 0),
-                "imgUrl":     cat.get("img_url", ""),
-                "productUrl": self._build_product_url(cat),
-                "specs":      self._extract_inline_specs(cat),
-            }
-            return product
-
-        all_products = [p for cat in catalogs1 if (p := parse_catalog(cat))]
-
-        # ── Step 2: Remaining pages in parallel with retry ────────────────────
-        def fetch_page(page: int) -> list:
-            for attempt in range(5):
-                try:
-                    purl = f"{base_url}?page={page}&format=json{extra_qs}"
-                    t = self._fetch(purl, retries=2).strip()
-                    if not t.startswith("{"):
-                        # GeM served HTML (likely a captcha or rate limit redirect), trigger retry loop
-                        raise ValueError("Response received is not JSON")
-                    d = json.loads(t)
-                    return [p for cat in d.get("catalogs", []) if (p := parse_catalog(cat))]
-                except Exception:
-                    if attempt < 4:
-                        time.sleep(2 * (attempt + 1)) # backoff
-            return []
-
-        if total_pages > 1:
-            pages_left = list(range(2, total_pages + 1))
-            # Use safer 8 workers instead of aggressive 20 to avoid WAF rate limits
-            with ThreadPoolExecutor(max_workers=min(8, len(pages_left))) as ex:
-                futures = [ex.submit(fetch_page, pg) for pg in pages_left]
-                for f in as_completed(futures):
-                    res = f.result()
-                    if res:
-                        all_products.extend(res)
-
-        # ── Step 3: Enrich only products missing golden filter specs ──────────
-        if all_products:
-            all_products, all_filters = self._enrich_and_build_filters(
-                all_products, facet_defs
-            )
-        else:
-            all_filters = []
-
-        return {
-            "filters":      all_filters,
-            "products":     all_products,
-            "url":          url,
-            "productCount": len(all_products),
-            "filterCount":  len(all_filters),
-            "totalResults": total_results,
-            "location":     location or "All India",
-        }
-
-    def _build_product_url(self, catalog: dict) -> str:
-        """Build a full product URL from catalog data."""
-        url_parts = catalog.get("url", [])
-        if url_parts and len(url_parts) >= 3:
-            return f"https://mkp.gem.gov.in/{'/'.join(url_parts)}"
-        return ""
-
-    def _extract_inline_specs(self, cat: dict) -> dict:
-        """
-        Extract specs directly from the catalog listing JSON item.
-        GeM embeds specs in multiple possible fields — try all of them.
-        This avoids visiting individual product pages for most products.
-        """
-        specs = {}
-        # Common keys GeM uses for inline specs
-        for key in ("specifications", "product_specifications", "spec_params",
-                    "params", "attributes", "properties", "features"):
-            items = cat.get(key, [])
-            if isinstance(items, list):
-                for item in items:
-                    if isinstance(item, dict):
-                        # Try all naming patterns GeM uses
-                        name  = (item.get("name") or item.get("key") or
-                                 item.get("label") or item.get("param_name") or "")
-                        value = (item.get("value") or item.get("val") or
-                                 item.get("param_value") or "")
-                        if name and value and len(str(value)) < 200:
-                            specs[str(name).strip()] = str(value).strip()
-            elif isinstance(items, dict):
-                for name, value in items.items():
-                    if name and value and len(str(value)) < 200:
-                        specs[str(name).strip()] = str(value).strip()
-        return specs
+    # ── FACETS ───────────────────────────────────────────────────────────────
 
     def _extract_facet_defs(self, facets: dict) -> list:
-        """
-        Extract facet definitions — and their values — from the JSON response.
-        GeM sometimes includes facet_values/topValues directly in the facet object.
-        When present, we can skip product-page enrichment for those filters entirely.
-        """
+        """Extract facet definitions -- and their values, when the API includes them."""
         defs = []
 
-        def _pull_values(facet: dict) -> list:
-            """Try to read filter values directly from the facet API response."""
-            for key in ("facet_values", "topValues", "top_values", "values",
-                        "entries", "options", "items", "terms"):
-                raw = facet.get(key, [])
-                if not raw:
-                    continue
-                vals = []
-                for v in raw:
-                    if isinstance(v, dict):
-                        label = (v.get("name") or v.get("value") or
-                                 v.get("code") or v.get("label") or "")
-                    else:
-                        label = str(v)
-                    label = str(label).strip()
-                    if label and label.lower() not in ("true", "false", "null", ""):
-                        vals.append(label)
-                if vals:
-                    return vals
-            return []
-
-        spec_facets = facets.get("product specifications", {}).get("facet_list", [])
-        for facet in spec_facets:
-            name      = facet.get("name", "")
-            code      = facet.get("code", "")
-            css_class = facet.get("css_class", "")
+        for facet in facets.get("product specifications", {}).get("facet_list", []):
+            name = facet.get("name", "")
             if len(name) > 200:
                 continue
             defs.append({
                 "filterName":  name,
-                "filterKey":   code,
-                "isGolden":    css_class == "golden",
+                "filterKey":   facet.get("code", ""),
+                "isGolden":    facet.get("css_class", "") == "golden",
                 "type":        facet.get("type", ""),
-                "facetValues": _pull_values(facet),  # values from API (may be [])
+                "facetValues": pull_facet_values(facet),
             })
 
-        admin_facets = facets.get("administrative", {}).get("facet_list", [])
-        for facet in admin_facets:
-            name  = facet.get("name", "")
-            code  = facet.get("code", "")
-            name_lower = name.lower()
-            is_golden = any(k in name_lower for k in
-                            ("make in india", "mse", "startup", "pac"))
+        for facet in facets.get("administrative", {}).get("facet_list", []):
+            name = facet.get("name", "")
+            is_golden = any(k in name.lower() for k in ("make in india", "mse", "startup", "pac"))
             if is_golden or name in ("Make in India", "Lead Time for Dispatch"):
                 defs.append({
                     "filterName":  name,
-                    "filterKey":   code,
+                    "filterKey":   facet.get("code", ""),
                     "isGolden":    is_golden,
                     "type":        facet.get("type", ""),
-                    "facetValues": _pull_values(facet),
+                    "facetValues": pull_facet_values(facet),
                 })
 
         return defs
-
-    def _extract_specs_from_page(self, soup: BeautifulSoup) -> dict:
-        """
-        Extract all specifications from a product detail page.
-        Specs are in tables inside #feature_groups, with td key-value pairs.
-        """
-        specs = {}
-
-        feature_groups = soup.select_one("#feature_groups")
-        if feature_groups:
-            for table in feature_groups.find_all("table"):
-                for row in table.find_all("tr"):
-                    cells = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
-                    if len(cells) >= 2 and cells[0] and cells[1]:
-                        name = cells[0].strip()
-                        value = cells[1].strip()
-                        if name and value and len(value) < 200:
-                            specs[name] = value
-
-        specs_div = soup.select_one(".specifications")
-        if specs_div:
-            for pc in specs_div.select(".param-container"):
-                key_el = pc.select_one(".key_name")
-                val_el = pc.select_one(".key_value")
-                if key_el and val_el:
-                    name = key_el.get_text(strip=True)
-                    value = val_el.get_text(strip=True)
-                    if name and value and name not in specs:
-                        specs[name] = value
-
-        return specs
 
     # ── Surgical Strike: Target a specific competitor ─────────────────────────
 
@@ -918,38 +143,29 @@ class GeMScraper:
         4. Suggest applying a DIFFERENT value to exclude them
         5. Verify each suggestion by scraping the category with that filter
         """
-        import time as _time
-        t_start = _time.time()
+        t_start = time.time()
 
         # Step 1: Fetch competitor product page and extract specs
         logger.info(f"[SurgicalStrike] Fetching competitor: {product_url}")
         try:
             html = self._fetch(product_url)
-            soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(html, HTML_PARSER)
         except Exception as e:
             return {"error": f"Failed to fetch product page: {e}"}
 
-        raw_specs = self._extract_specs_from_page(soup)
+        raw_specs = extract_specs_from_soup(soup)
         if not raw_specs:
             return {"error": "Could not extract specs from the product page. Make sure it's a valid GeM product detail URL."}
 
-        # Extract product name and price from the page
         product_name = ""
-        product_price = None
         name_el = soup.select_one("h1, .product-name, .product-title, [class*='product'] h2")
         if name_el:
             product_name = name_el.get_text(strip=True)[:120]
 
+        product_price = None
         price_el = soup.select_one(".price, [class*='price'], .final-price")
         if price_el:
-            import re
-            price_text = price_el.get_text(strip=True)
-            price_match = re.search(r'[\d,]+(?:\.\d+)?', price_text.replace(',', ''))
-            if price_match:
-                try:
-                    product_price = int(float(price_match.group()))
-                except:
-                    pass
+            product_price = parse_price(price_el.get_text(strip=True))
 
         logger.info(f"[SurgicalStrike] Extracted {len(raw_specs)} specs from product")
 
@@ -967,8 +183,7 @@ class GeMScraper:
         matches = []
         for spec_name, spec_value in raw_specs.items():
             for gf_key, gf_info in golden_map.items():
-                # Match by name (fuzzy)
-                if self._names_match(spec_name, gf_info["filterName"]):
+                if names_match(spec_name, gf_info["filterName"]):
                     matches.append({
                         "filterKey": gf_key,
                         "filterName": gf_info["filterName"],
@@ -987,11 +202,9 @@ class GeMScraper:
 
         for match in matches:
             competitor_val = match["competitorValue"].strip()
-            available = match["availableValues"]
 
-            for alt_val in available:
+            for alt_val in match["availableValues"]:
                 alt_val_clean = str(alt_val).strip()
-                # Skip if same as competitor's value
                 if alt_val_clean.lower() == competitor_val.lower():
                     continue
 
@@ -1001,9 +214,7 @@ class GeMScraper:
                     params.update(base_extra)
 
                 try:
-                    scrape_result = self._fast_price_scrape(
-                        category_url_clean, params, location, seller_price=target_price
-                    )
+                    scrape_result = self._fast_price_scrape(category_url_clean, params, location)
                     api_calls += 1
                 except Exception as e:
                     logger.warning(
@@ -1032,8 +243,6 @@ class GeMScraper:
             -(x["resultMinPrice"] or 0),
         ))
 
-        elapsed = _time.time() - t_start
-
         return {
             "competitorName": product_name,
             "competitorPrice": product_price,
@@ -1042,11 +251,10 @@ class GeMScraper:
             "goldenMatches": matches,
             "counterFilters": counter_filters,
             "totalApiCalls": api_calls,
-            "elapsed": round(elapsed, 1),
+            "elapsed": round(time.time() - t_start, 1),
             "wins": sum(1 for cf in counter_filters if cf["wouldWin"]),
             "untapped": sum(1 for cf in counter_filters if cf["isUntapped"]),
         }
-
 
     def _enrich_single_product(self, product: dict, name_to_code: dict) -> dict:
         """Fetch specs for a single product (used by thread pool)."""
@@ -1058,23 +266,18 @@ class GeMScraper:
             return product
         try:
             html = self._fetch(url)
-            soup = BeautifulSoup(html, "html.parser")
-            raw_specs = self._extract_specs_from_page(soup)
+            raw_specs = extract_specs_from_soup(BeautifulSoup(html, HTML_PARSER))
+            resolve_name = make_name_resolver(name_to_code)
 
             matched_specs = {}
             for spec_name, spec_value in raw_specs.items():
                 if not spec_value or len(spec_value) > 150:
                     continue
-                matched_code = name_to_code.get(spec_name)
-                if not matched_code:
-                    for facet_name, facet_code in name_to_code.items():
-                        if self._names_match(spec_name, facet_name):
-                            matched_code = facet_code
-                            break
-                if matched_code:
-                    matched_specs[matched_code] = spec_value
+                facet_name = resolve_name(spec_name)
+                if facet_name:
+                    matched_specs[name_to_code[facet_name]] = spec_value
                 else:
-                    matched_specs[self._to_key(spec_name)] = spec_value
+                    matched_specs[to_key(spec_name)] = spec_value
 
             self._product_specs_cache[url] = matched_specs
             product["specs"] = matched_specs
@@ -1082,370 +285,21 @@ class GeMScraper:
             logger.warning(f"[Enrich] Failed to fetch/parse specs for {url}: {e}")
         return product
 
-    def _enrich_and_build_filters(self, products: list, facet_defs: list) -> tuple:
-        """
-        Build filter values from product specs.
-
-        Strategy (fastest-first cascade):
-        1. Use facetValues from the API response directly (zero extra requests)
-        2. Use inline specs already extracted from the listing JSON
-        3. Only visit product detail pages for golden filters STILL missing values
-           — prioritise cheapest products (most relevant for L1 analysis)
-
-        """
-        name_to_code = {fd["filterName"]: fd["filterKey"] for fd in facet_defs}
-
-        # ── Level 1: values from facet API ───────────────────────────────────
-        filter_values: dict[str, set] = {}
-        facet_api_covered: set[str] = set()  # codes covered by API values
-        for fd in facet_defs:
-            api_vals = fd.get("facetValues", [])
-            if api_vals:
-                filter_values[fd["filterKey"]] = set(api_vals)
-                facet_api_covered.add(fd["filterKey"])
-
-        # ── Level 2: inline specs already in each catalog item ────────────────
-        for product in products:
-            for spec_name, spec_value in product.get("specs", {}).items():
-                if not spec_value or len(spec_value) > 150:
-                    continue
-                code = name_to_code.get(spec_name)
-                if not code:
-                    for fname, fcode in name_to_code.items():
-                        if self._names_match(spec_name, fname):
-                            code = fcode
-                            break
-                if code:
-                    filter_values.setdefault(code, set()).add(spec_value)
-
-        # ── Level 3: product-page enrichment for STILL-missing golden filters ─
-        golden_codes_missing = {
-            fd["filterKey"] for fd in facet_defs
-            if fd.get("isGolden")
-            and fd["filterKey"] not in filter_values
-        }
-
-        if golden_codes_missing:
-            # Sort cheapest first — if we find values early, we stop sooner
-            products_sorted = sorted(products, key=lambda p: p["price"])
-            to_enrich = products_sorted[:self.MAX_ENRICH]
-
-            with ThreadPoolExecutor(max_workers=self.ENRICH_WORKERS) as executor:
-                futures = {
-                    executor.submit(self._enrich_single_product, p, name_to_code): p
-                    for p in to_enrich
-                }
-                for future in as_completed(futures):
-                    try:
-                        product = future.result()
-                        for code in name_to_code.values():
-                            val = product["specs"].get(code)
-                            if val:
-                                filter_values.setdefault(code, set()).add(val)
-                    except Exception:
-                        pass
-                    # Early stop: if all golden filters now have values, done
-                    if not (golden_codes_missing - filter_values.keys()):
-                        break
-
-        # ── Build final filter list ───────────────────────────────────────────
-        golden_filters = []
-        non_golden_filters = []
-        for fd in facet_defs:
-            code = fd["filterKey"]
-            vals = sorted(filter_values.get(code, set()))
-            if not vals:
-                continue
-            entry = {
-                "filterName": fd["filterName"],
-                "filterKey":  code,
-                "values":     vals[:20],
-                "isGolden":   fd.get("isGolden", False),
-                "type":       fd.get("type", ""),
-            }
-            if fd.get("isGolden", False):
-                golden_filters.append(entry)
-            else:
-                non_golden_filters.append(entry)
-
-        # Always return ALL golden filters (never cap them) — they are used for deep search
-        golden_filters.sort(key=lambda f: (-len(f["values"]), f["filterName"]))
-        # Cap non-golden filters for display only
-        non_golden_filters.sort(key=lambda f: (-len(f["values"]), f["filterName"]))
-        filters = golden_filters + non_golden_filters[:self.MAX_FILTERS]
-        return products, filters
-
     # ── SMART L1 HUNT (Sequential Chain Elimination) ────────────────────────────
     # Methods imported from chain_hunt.py for cleaner organization.
 
-    from chain_hunt import _chain_scrape, _get_facet_values_for_key, smart_l1_discovery
-
-    # ── HTML FALLBACK ────────────────────────────────────────────────────────
-
-    def _scrape_html_listing(self, html_content: str, url: str) -> dict:
-        """
-        BeautifulSoup-based fallback parser for HTML listing pages when JSON API fails.
-        Extracts products and available filters directly from the HTML source.
-        """
-        logger.info(f"[HTML Fallback] Parsing HTML source from category URL: {url}")
-        soup = BeautifulSoup(html_content, "html.parser")
-
-        products = []
-        # 1. Product card selectors
-        cards = soup.select(
-            "#search-result-items li, "
-            ".product-wrapper, "
-            ".catalog-item, "
-            ".product-card, "
-            ".product-item, "
-            ".product_card, "
-            ".product-tuple, "
-            ".product-grid-item"
-        )
-        
-        # 1.1 Resilient link-based card recovery fallback
-        if not cards:
-            links = soup.find_all("a", href=re.compile(r'/p-\d+-\d+-cat\.html'))
-            seen_parents = set()
-            for a in links:
-                p = a.parent
-                for _ in range(4):  # climb up to 4 levels to find a suitable card container
-                    if p and p.name in ('div', 'li') and (p.get('class') or p.name == 'li'):
-                        if p not in seen_parents:
-                            seen_parents.add(p)
-                            cards.append(p)
-                        break
-                    p = p.parent if p else None
-
-        for card in cards:
-            try:
-                # Find the product detail link
-                link_el = card.select_one('a[href*="/p-"]')
-                if not link_el:
-                    link_el = card.find('a', href=re.compile(r'/p-\d+-\d+-cat\.html'))
-                if not link_el:
-                    continue
-                
-                href = link_el.get("href", "")
-                product_url = href if href.startswith("http") else f"https://mkp.gem.gov.in{href}"
-                
-                # Extract catalog ID & variant ID from URL
-                m = re.search(r'/p-(\d+)-(\d+)-cat\.html', product_url)
-                if m:
-                    catalog_id = m.group(1)
-                    variant_id = f"{catalog_id}-{m.group(2)}"
-                else:
-                    continue
-
-                # Title / Name
-                name_el = card.select_one('.product-title, .title, .product-name, h5, h4, [class*="title"]')
-                if not name_el:
-                    name_el = link_el
-                name = name_el.get_text(strip=True) if name_el else ""
-                name = re.sub(r'([A-Z\s]+)\1', r'\1', name).strip()  # Clean duplicate uppercase names if any
-                
-                # Price
-                price = 0
-                price_el = card.select_one('.final-price, .price, .offer_price, .our_price, [class*="price"]')
-                if price_el:
-                    price = self._parse_price(price_el.get_text(strip=True)) or 0
-
-                if price <= 0:
-                    continue
-
-                # Brand
-                brand_el = card.select_one('.brand, .brand-name, [class*="brand"]')
-                brand = brand_el.get_text(strip=True) if brand_el else ""
-                
-                # Seller & SellerType
-                seller_el = card.select_one('.seller-name, .seller, .sold-by')
-                if not seller_el:
-                    seller_el = card.select_one('[class*="seller-name"], [class*="sold-by"]')
-                seller = seller_el.get_text(strip=True) if seller_el else ""
-                
-                sold_as_el = card.select_one('[class*="sold_as"], [class*="seller-type"]')
-                seller_type = sold_as_el.get_text(strip=True) if sold_as_el else ""
-                
-                # Specs (try to parse inline bullets if present)
-                specs = {}
-                for li in card.select('ul.specs-list li, .specs li, .specifications li, .attributes li'):
-                    text = li.get_text(strip=True)
-                    if ":" in text:
-                        k, v = text.split(":", 1)
-                        specs[k.strip()] = v.strip()
-
-                products.append({
-                    "id": variant_id,
-                    "name": name[:150],
-                    "price": price,
-                    "brand": brand,
-                    "seller": seller,
-                    "sellerType": seller_type,
-                    "productUrl": product_url,
-                    "specs": specs,
-                })
-            except Exception as e:
-                logger.warning(f"[HTML Fallback] Error parsing card: {e}")
-                continue
-
-        # 2. Extract Filters/Facets
-        filters = []
-        
-        # Check standard container elements for sidebar facets
-        sidebar = soup.select_one('#facets, #filters, .facets-container, .sidebar, #search-facets, .filter-sidebar')
-        if sidebar:
-            # Look for each facet block/section
-            facet_blocks = sidebar.select('.facet, .filter-section, .facet-list, [class*="filter-group"]')
-            for block in facet_blocks:
-                # Name of the filter
-                title_el = block.select_one('h5, h6, .facet-title, [class*="title"]')
-                if not title_el:
-                    continue
-                filter_name = title_el.get_text(strip=True).replace(":", "").strip()
-                if not filter_name or len(filter_name) > 80:
-                    continue
-                
-                # Try to find a code/key (or generate one from the title)
-                filter_key = block.get('id') or block.get('data-facet') or self._to_key(filter_name)
-                
-                # Extract options/values (prevent selecting parent containers containing children)
-                vals = []
-                val_elements = block.select('label, .facet-values li, [class*="option"], [class*="value"]')
-                leaf_elements = []
-                for el in val_elements:
-                    is_parent = False
-                    for other in val_elements:
-                        if other is not el and other in el.descendants:
-                            is_parent = True
-                            break
-                    if not is_parent:
-                        leaf_elements.append(el)
-                        
-                for val_el in leaf_elements:
-                    val_text = val_el.get_text(strip=True)
-                    val_text = re.sub(r'\s*\(\d+\)\s*$', '', val_text).strip()
-                    if val_text and val_text.lower() not in ("true", "false", "null", "all", ""):
-                        if val_text not in vals:
-                            vals.append(val_text)
-                
-                if not vals:
-                    continue
-                
-                # Identify if golden
-                is_golden = 'golden' in block.get('class', []) or 'golden' in title_el.get('class', [])
-                if not is_golden:
-                    name_lower = filter_name.lower()
-                    is_golden = any(k in name_lower for k in ("make in india", "mse", "startup", "pac"))
-                
-                filters.append({
-                    "filterName": filter_name,
-                    "filterKey": filter_key,
-                    "values": vals[:20],
-                    "isGolden": is_golden,
-                    "type": "spec" if not is_golden else "golden",
-                })
-        
-        # 3. Fallback: If no filters parsed from sidebar, build dummy golden filters from products' specs
-        if not filters and products:
-            filter_values = {}
-            for p in products:
-                for k, v in p.get("specs", {}).items():
-                    filter_values.setdefault(k, set()).add(v)
-            for fname, vals in filter_values.items():
-                filters.append({
-                    "filterName": fname,
-                    "filterKey": self._to_key(fname),
-                    "values": sorted(list(vals))[:20],
-                    "isGolden": True,
-                    "type": "spec",
-                })
-
-        logger.info(f"[HTML Fallback] Successfully parsed {len(products)} products and {len(filters)} filters.")
-        
-        return {
-            "filters": filters,
-            "products": products,
-            "url": url,
-            "productCount": len(products),
-            "filterCount": len(filters),
-            "totalResults": len(products),
-            "location": "All India",
-        }
+    from chain_hunt import _chain_scrape, smart_l1_discovery
 
     # ── HTTP ────────────────────────────────────────────────────────────────
 
     def _fetch(self, url: str, retries: int = 3) -> str:
         """
         Fetch a URL through the shared Playwright browser (needed to bypass
-        GeM's WAF, which blocks plain requests.Session calls).
+        GeM's WAF, which blocks plain HTTP clients).
 
-        Playwright's sync API can only be driven from the thread that
-        created it, so this delegates to BrowserManager.fetch(), which runs
-        the actual browser I/O on its own dedicated background thread
-        (async Playwright under the hood) and blocks this calling thread —
-        whichever thread that is — for the result. Safe to call from a
-        ThreadPoolExecutor worker.
+        Delegates to BrowserManager.fetch(), which runs the browser I/O on its
+        own background event-loop thread and blocks this calling thread for
+        the result. Safe to call from a ThreadPoolExecutor worker.
         """
         from crawler import BrowserManager
         return BrowserManager.get_instance().fetch(url, timeout=30000, retries=retries)
-
-    def _fetch_many(self, urls: list, retries: int = 2) -> list:
-        """
-        Fetch many URLs with genuine concurrent network I/O (all in flight
-        on BrowserManager's background event loop at once). Returns a list
-        aligned with `urls`; failed entries are None.
-        """
-        from crawler import BrowserManager
-        return BrowserManager.get_instance().fetch_many(urls, timeout=15000, retries=retries)
-
-    # ── HELPERS ─────────────────────────────────────────────────────────────
-
-    def _names_match(self, name1: str, name2: str) -> bool:
-        """Check if two spec/filter names are equivalent."""
-        n1 = name1.lower().strip().replace("::", "/")
-        n2 = name2.lower().strip().replace("::", "/")
-        if n1 == n2:
-            return True
-        k1 = re.sub(r'[^a-z0-9]', '', n1)
-        k2 = re.sub(r'[^a-z0-9]', '', n2)
-        # k1 == k2 is already an exact match once punctuation/whitespace is
-        # stripped -- there's no ambiguity risk from a short name here (that
-        # would be a concern for a substring/prefix test, not equality), so
-        # only guard against both sides degenerating to an empty string.
-        # Real golden facet names can be short (e.g. "BIS"), and requiring
-        # len > 5 made those never match a differently-punctuated rendering
-        # of the same name on a product detail page.
-        return bool(k1) and k1 == k2
-
-    def _parse_price(self, text: str) -> int | None:
-        cleaned = re.sub(r'[₹,\s]', '', text)
-        cleaned = re.sub(r'(?i)INR|Rs\.?', '', cleaned)
-        m = re.search(r'(\d+(?:\.\d+)?)', cleaned)
-        if m:
-            val = float(m.group(1))
-            if 10 <= val <= 10_000_000:
-                return int(val)
-        return None
-
-    def _to_key(self, name: str) -> str:
-        key = re.sub(r'[^a-z0-9\s]', '', name.lower().strip())
-        return re.sub(r'\s+', '_', key).strip('_')[:40]
-
-    def _normalize_filter_value(self, val) -> str:
-        """
-        Normalize a spec filter value for the GeM search JSON API index.
-        E.g. "Brown / Tan" -> "Brown", "1000 : 1" -> "1000 1".
-
-        NOTE: previously also stripped spaces ("Mesh fabrics" -> "Meshfabrics").
-        Live-tested against a real category and that's wrong -- GeM doesn't
-        recognize the space-stripped value, and instead of cleanly returning
-        0 it returns an unrelated, inflated result count, corrupting
-        verification. Keep spaces; urlencode() handles proper encoding.
-        """
-        if not isinstance(val, str):
-            return str(val)
-        if "/" in val:
-            val = val.split("/")[0]
-        val = val.replace(":", "").strip()
-        return val
-

@@ -10,11 +10,8 @@
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
-    "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.7",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "recharts": "^2.10.0"
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.0",
