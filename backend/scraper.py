@@ -78,13 +78,18 @@ class GeMScraper:
         if location and location.lower() not in ("", "all india", "all"):
             query["localized_search"] = location
 
+        # A fetch failure or WAF block page is NOT an empty niche -- flag it so
+        # callers don't report "0 competitors" for a check that never ran.
+        failed = {"min_price": None, "total": 0, "product_count": 0, "error": True}
         try:
             text = self._fetch(f"{base_url}?{urlencode(query)}").strip()
             if not text.startswith("{"):
-                return {"min_price": None, "total": 0, "product_count": 0}
+                logger.warning(f"[FastPrice] Non-JSON response for {base_url}: {text[:200]!r}")
+                return failed
             data = json.loads(text)
-        except Exception:
-            return {"min_price": None, "total": 0, "product_count": 0}
+        except Exception as e:
+            logger.warning(f"[FastPrice] Price check failed for {base_url}: {e}")
+            return failed
 
         prices = [
             price for c in data.get("catalogs", [])
@@ -94,6 +99,7 @@ class GeMScraper:
             "min_price":     min(prices) if prices else None,
             "total":         data.get("number_of_results", 0),
             "product_count": len(prices),
+            "error":         False,
         }
 
     # ── FACETS ───────────────────────────────────────────────────────────────
@@ -199,6 +205,7 @@ class GeMScraper:
         category_url_clean, base_extra = self._normalize_url(category_url)
         counter_filters = []
         api_calls = 0
+        failed_checks = 0
 
         for match in matches:
             competitor_val = match["competitorValue"].strip()
@@ -213,13 +220,13 @@ class GeMScraper:
                 if base_extra:
                     params.update(base_extra)
 
-                try:
-                    scrape_result = self._fast_price_scrape(category_url_clean, params, location)
-                    api_calls += 1
-                except Exception as e:
+                scrape_result = self._fast_price_scrape(category_url_clean, params, location)
+                api_calls += 1
+                if scrape_result.get("error"):
+                    failed_checks += 1
                     logger.warning(
-                        f"[SurgicalStrike] Counter-filter scrape failed for "
-                        f"{match['filterKey']}={alt_val_clean}: {e}"
+                        f"[SurgicalStrike] Counter-filter check failed for "
+                        f"{match['filterKey']}={alt_val_clean}"
                     )
                     continue
 
@@ -251,6 +258,7 @@ class GeMScraper:
             "goldenMatches": matches,
             "counterFilters": counter_filters,
             "totalApiCalls": api_calls,
+            "failedChecks": failed_checks,
             "elapsed": round(time.time() - t_start, 1),
             "wins": sum(1 for cf in counter_filters if cf["wouldWin"]),
             "untapped": sum(1 for cf in counter_filters if cf["isUntapped"]),

@@ -68,12 +68,18 @@ app = FastAPI(
 
 # ── Middlewares ───────────────────────────────────────────────────────────────
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# The frontend is served from this same origin in production and through
+# Vite's proxy in dev, so cross-origin access stays off unless explicitly
+# configured (ALLOWED_ORIGINS, comma-separated).
+_allowed_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # ── Cache (30 min TTL) ────────────────────────────────────────────────────────
 _cache: dict = {}
@@ -131,6 +137,34 @@ class L1SurpassRequest(BaseModel):
     my_price: int
 
 
+# ── URL validation ────────────────────────────────────────────────────────────
+
+GEM_HOSTS = ("gem.gov.in", "mkp.gem.gov.in", "mkp.gemorion.org")
+
+
+def _require_gem_url(url: str, field: str) -> str:
+    """
+    Normalize a user-supplied URL and reject anything that isn't a GeM page.
+
+    Every URL an endpoint accepts gets opened by the server's own headless
+    browser, so an unchecked one would let any caller make the server fetch
+    internal addresses (cloud metadata, admin panels) and read the result.
+    """
+    url = (url or "").strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in ("http", "https") or not any(
+        host == h or host.endswith("." + h) for h in GEM_HOSTS
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field} must be a GeM portal URL (gem.gov.in or mkp.gem.gov.in).",
+        )
+    return url
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 api_router = APIRouter(prefix="/api")
@@ -167,23 +201,7 @@ def locations():
 
 @api_router.post("/scrape")
 def scrape(req: ScrapeRequest):
-    url = req.url.strip()
-
-    # Auto-prepend https:// if no protocol given
-    if not url.startswith("http://") and not url.startswith("https://"):
-        url = "https://" + url
-
-    gem_hosts = [
-        "gem.gov.in",
-        "mkp.gem.gov.in",
-        "mkp.gemorion.org",
-    ]
-    parsed_host = urlparse(url).hostname or ""
-    if not any(parsed_host == h or parsed_host.endswith("." + h) for h in gem_hosts):
-        raise HTTPException(
-            status_code=400,
-            detail="URL must be a GeM portal page (gem.gov.in or mkp.gem.gov.in).",
-        )
+    url = _require_gem_url(req.url, "URL")
 
     cache_key = hashlib.md5(f"{url}|{req.location}".encode()).hexdigest()
     cached = _cache_get(cache_key)
@@ -232,6 +250,8 @@ def chain_hunt(req: ChainHuntRequest):
     if req.target_price <= 0:
         raise HTTPException(status_code=400, detail="target_price must be > 0.")
 
+    category_url = _require_gem_url(req.category_url, "category_url")
+
     golden = req.golden_filters
     if not golden:
         raise HTTPException(
@@ -246,7 +266,7 @@ def chain_hunt(req: ChainHuntRequest):
         excluded = set(req.excluded_filter_keys or [])
         excluded.add("mse_applicable")
         result = scraper.smart_l1_discovery(
-            category_url=req.category_url,
+            category_url=category_url,
             target_price=req.target_price,
             golden_filters=golden,
             location=req.location or "",
@@ -267,10 +287,11 @@ def get_product_specs(req: ProductSpecRequest):
     Scrape live specifications for a single product using Playwright.
     Used for Clickable Competitor L2/L3 insights.
     """
+    product_url = _require_gem_url(req.product_url, "product_url")
     try:
         from crawler import GeMCrawler
         crawler = GeMCrawler()
-        product_data = crawler.crawl_product(req.product_url)
+        product_data = crawler.crawl_product(product_url)
         return {"status": "success", "specs": product_data.get("specs", {})}
     except Exception as e:
         logger.error(f"Failed to scrape specs for {req.product_url}: {e}")
@@ -287,16 +308,15 @@ def surgical_strike(req: SurgicalStrikeRequest):
     if req.target_price <= 0:
         raise HTTPException(status_code=400, detail="target_price must be > 0.")
 
-    product_url = req.product_url.strip()
-    if not product_url.startswith("http://") and not product_url.startswith("https://"):
-        product_url = "https://" + product_url
+    product_url = _require_gem_url(req.product_url, "product_url")
+    category_url = _require_gem_url(req.category_url, "category_url")
 
     try:
         from scraper import GeMScraper
         scraper = GeMScraper()
         result = scraper.surgical_strike(
             product_url=product_url,
-            category_url=req.category_url,
+            category_url=category_url,
             target_price=req.target_price,
             golden_filters=req.golden_filters,
             location=req.location or "",
@@ -317,13 +337,12 @@ def l1_surpass(req: L1SurpassRequest):
     """
     if req.my_price <= 0:
         raise HTTPException(status_code=400, detail="my_price must be > 0.")
-    if not req.category_url.strip():
-        raise HTTPException(status_code=400, detail="category_url is required.")
+    category_url = _require_gem_url(req.category_url, "category_url")
 
     try:
         from l1_surpasser import L1ChainSurpasser
         surpasser = L1ChainSurpasser(
-            category_url=req.category_url,
+            category_url=category_url,
             my_catalogue_id=req.my_catalogue_id,
             my_price=req.my_price,
         )

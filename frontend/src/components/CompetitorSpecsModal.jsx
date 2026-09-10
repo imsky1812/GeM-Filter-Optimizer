@@ -1,5 +1,9 @@
 import { X, Warning, Star, ArrowSquareOut } from "@phosphor-icons/react";
 
+// Match spec names the way the backend does: ignore case and punctuation,
+// so "B.I.S" on a product page still lines up with the "BIS" filter.
+const normalizeName = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+
 export default function CompetitorSpecsModal({
   selectedCompetitor,
   setSelectedCompetitor,
@@ -9,6 +13,16 @@ export default function CompetitorSpecsModal({
   scrapedData
 }) {
   if (!selectedCompetitor) return null;
+
+  const goldenNames = new Set(
+    (scrapedData?.filters || [])
+      .filter((f) => f.isGolden)
+      .map((f) => normalizeName(f.filterName))
+      .filter(Boolean)
+  );
+  const goldenSpecs = Object.entries(competitorSpecs || {}).filter(([key]) =>
+    goldenNames.has(normalizeName(key))
+  );
 
   return (
     <div className="modal-overlay" onClick={() => setSelectedCompetitor(null)}>
@@ -37,7 +51,7 @@ export default function CompetitorSpecsModal({
             <X size={16} weight="bold" />
           </button>
         </div>
-        
+
         <div className="modal-content custom-scrollbar">
           {isFetchingSpecs ? (
             <div className="modal-loading">
@@ -48,48 +62,38 @@ export default function CompetitorSpecsModal({
             <div className="err-box">
               <Warning size={14} weight="fill" className="inline-icon" /> {competitorSpecsError}
             </div>
-          ) : competitorSpecs && Object.keys(competitorSpecs).length > 0 ? (
+          ) : goldenSpecs.length > 0 ? (
             <div>
               <div className="modal-info-row">
                 <span className="modal-info-dot"></span>
                 Golden filters only. Everything that matters.
               </div>
               <div className="flex-column-gap-8">
-                {Object.entries(competitorSpecs)
-                  .filter(([key]) => scrapedData?.filters?.some(f => f.isGolden && f.filterName.toLowerCase() === key.toLowerCase()))
-                  .map(([key, value]) => {
-                    const isGolden = true;
-                    return (
-                      <div 
-                        key={key} 
-                        className="spec-row"
-                        data-golden={isGolden ? "true" : "false"}
-                      >
-                        <div 
-                          className="spec-name"
-                          data-golden={isGolden ? "true" : "false"}
-                        >
-                          {key} {isGolden && <Star size={11} weight="fill" className="inline-icon" />}
-                        </div>
-                        <div className="spec-value">
-                          {value}
-                        </div>
-                      </div>
-                    );
-                  })}
+                {goldenSpecs.map(([key, value]) => (
+                  <div key={key} className="spec-row" data-golden="true">
+                    <div className="spec-name" data-golden="true">
+                      {key} <Star size={11} weight="fill" className="inline-icon" />
+                    </div>
+                    <div className="spec-value">
+                      {value}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           ) : (
             <div className="empty">
-              No specifications found for this product.
+              {competitorSpecs && Object.keys(competitorSpecs).length > 0
+                ? "None of this product's specs match a golden filter."
+                : "No specifications found for this product."}
             </div>
           )}
         </div>
         {selectedCompetitor.url && (
           <div className="modal-footer">
-            <a 
-              href={selectedCompetitor.url} 
-              target="_blank" 
+            <a
+              href={selectedCompetitor.url}
+              target="_blank"
               rel="noopener noreferrer"
               className="modal-footer-link"
             >

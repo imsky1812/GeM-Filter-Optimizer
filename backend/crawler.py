@@ -27,6 +27,7 @@ genuinely interleave instead of serializing or crashing.
 """
 
 import re
+import html
 import json
 import time
 import random
@@ -73,6 +74,39 @@ def _looks_like_login_redirect(current_url: str) -> bool:
     return "mkp.gem.gov.in" in final_url and (
         final_url == "https://mkp.gem.gov.in" or "login" in final_url.lower()
     )
+
+
+async def _page_body(page, response) -> str:
+    """
+    The raw body of a navigation's response, falling back to the rendered DOM.
+
+    Never read JSON through page.content() alone: Chromium shows a JSON
+    response inside its viewer's <pre>, and serializing the DOM HTML-escapes
+    &, < and > in that text -- "Steel & Aluminium" comes back as
+    "Steel &amp; Aluminium", corrupting names and filter values.
+    """
+    if response is not None:
+        try:
+            return await response.text()
+        except Exception:
+            pass
+    return await page.content()
+
+
+def _extract_json_text(body: str) -> Optional[str]:
+    """
+    Return the JSON text in a response body, or None if it isn't JSON.
+    Also accepts Chromium's rendered JSON viewer, undoing its HTML escaping.
+    """
+    stripped = body.strip()
+    if stripped.startswith("{"):
+        return stripped
+    m = re.search(r"<pre[^>]*>(.*?)</pre>", body, re.DOTALL)
+    if m:
+        text = html.unescape(m.group(1)).strip()
+        if text.startswith("{"):
+            return text
+    return None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -239,7 +273,6 @@ class BrowserManager:
                         "--disable-dev-shm-usage",
                         "--no-sandbox",
                         "--disable-setuid-sandbox",
-                        "--disable-web-security",
                         "--disable-features=VizDisplayCompositor",
                     ],
                 )
@@ -357,12 +390,10 @@ class BrowserManager:
         for attempt in range(retries):
             page = await self.acquire_page_async()
             try:
-                await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
-                content = await page.content()
-
-                json_match = re.search(r'(\{.*\})', content, re.DOTALL)
-                if json_match and ("<pre" in content or "format=json" in url):
-                    return json_match.group(1)
+                response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+                json_text = _extract_json_text(await _page_body(page, response))
+                if json_text is not None:
+                    return json_text
 
                 # Detect GeM redirecting us to the homepage/login (session invalid)
                 if _looks_like_login_redirect(page.url):
@@ -374,17 +405,16 @@ class BrowserManager:
                     # valid content -- raise so the caller sees a real failure.
                     raise RuntimeError(f"GeM redirected to login/homepage on final attempt: {page.url}")
 
-                if not json_match:
-                    try:
-                        await page.wait_for_selector(
-                            "h1, #feature_groups, .specifications, #search-result-items",
-                            timeout=3000,
-                        )
-                        content = await page.content()
-                    except Exception:
-                        pass
+                # A real HTML page: give client-rendered content a moment to appear.
+                try:
+                    await page.wait_for_selector(
+                        "h1, #feature_groups, .specifications, #search-result-items",
+                        timeout=3000,
+                    )
+                except Exception:
+                    pass
 
-                return content
+                return await page.content()
             except Exception as e:
                 last_err = e
                 logger.warning(f"[Crawler] Fetch attempt {attempt + 1}/{retries} failed for {url}: {e}")
@@ -683,11 +713,11 @@ class GeMCrawler:
                 query_params["localized_search"] = location
 
             api_url = f"{base_url}?{urlencode(query_params)}"
-            await page.goto(api_url, timeout=20000, wait_until="domcontentloaded")
+            response = await page.goto(api_url, timeout=20000, wait_until="domcontentloaded")
 
-            text = await page.content()
-            json_match = re.search(r'(\{.*\})', text, re.DOTALL)
-            if not json_match:
+            text = await _page_body(page, response)
+            json_text = _extract_json_text(text)
+            if json_text is None:
                 # A WAF block page, login redirect, or captcha interstitial also
                 # fails this parse -- that is NOT the same thing as GeM telling us
                 # the niche is genuinely empty. Callers (chain_hunt's mismatch
@@ -702,7 +732,7 @@ class GeMCrawler:
                 )
                 return {"min_price": None, "total": 0, "product_count": 0, "seller_count": 0, "error": True}
 
-            data = json.loads(json_match.group(1))
+            data = json.loads(json_text)
             total = data.get("number_of_results", 0)
             catalogs = data.get("catalogs", [])
 
@@ -732,11 +762,10 @@ class GeMCrawler:
                 try:
                     query_params["page"] = 2
                     p2_url = f"{base_url}?{urlencode(query_params)}"
-                    await page.goto(p2_url, timeout=15000, wait_until="domcontentloaded")
-                    text2 = await page.content()
-                    json_match2 = re.search(r'(\{.*\})', text2, re.DOTALL)
-                    if json_match2:
-                        d2 = json.loads(json_match2.group(1))
+                    response2 = await page.goto(p2_url, timeout=15000, wait_until="domcontentloaded")
+                    json_text2 = _extract_json_text(await _page_body(page, response2))
+                    if json_text2 is not None:
+                        d2 = json.loads(json_text2)
                         for cat in d2.get("catalogs", []):
                             price = int(cat.get("final_price", {}).get("value", 0))
                             if price <= 0:

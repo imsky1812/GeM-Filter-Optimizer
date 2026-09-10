@@ -93,6 +93,7 @@ export default function SurgicalStrike({
                 )}
                 <div className="text-xs-subtle">
                   {strikeResults.goldenMatches?.length ?? 0} golden filters matched · {strikeResults.totalApiCalls} API calls · {strikeResults.elapsed}s
+                  {strikeResults.failedChecks > 0 && <> · {strikeResults.failedChecks} checks failed</>}
                 </div>
               </div>
             </div>
@@ -181,7 +182,9 @@ export default function SurgicalStrike({
             <div className="empty margin-top-16">
               <div className="empty-icon"><Target size={28} weight="fill" /></div>
               <div className="empty-text">
-                They match every golden filter. No counter-move available.
+                {strikeResults.failedChecks > 0
+                  ? "GeM didn't answer the counter-filter checks. Re-analyze to try again."
+                  : "They match every golden filter. No counter-move available."}
               </div>
             </div>
           )}

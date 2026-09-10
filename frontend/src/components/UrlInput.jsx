@@ -73,7 +73,7 @@ export default function UrlInput({
       {scrapeStatus === "done" && scrapedData && (
         <div className="info-box">
           <CheckCircle size={14} weight="fill" className="inline-icon" />{" "}
-          <strong>{scrapedData.filters.length} golden filters</strong> found across{" "}
+          <strong>{scrapedData.filters.filter((f) => f.isGolden).length} golden filters</strong> found across{" "}
           <strong>{scrapedData.totalResults.toLocaleString()} products</strong>
           {scrapedData.location && scrapedData.location !== "All India" && (
             <span className="loc-badge"><MapPin size={11} weight="fill" /> {scrapedData.location}</span>

@@ -30,7 +30,7 @@ if not exist venv (
 )
 call venv\Scripts\activate
 echo Installing server dependencies...
-pip install -r requirements.txt --quiet
+pip install -r requirements.txt --quiet && python -m playwright install chromium
 cd ..
 
 :: Step 3: Ready notification and Browser start
@@ -48,5 +48,5 @@ echo KEEP THIS WINDOW OPEN TO USE THE TOOL
 echo Press CTRL+C to close the server.
 echo ------------------------------------------
 cd backend
-uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+uvicorn main:app --host 0.0.0.0 --port 8000
 pause

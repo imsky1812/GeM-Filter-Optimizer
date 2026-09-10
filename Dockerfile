@@ -18,7 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Setup Backend
 WORKDIR /app/backend
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Playwright's Python package doesn't include the browser: install Chromium
+# and its system libraries, or every scrape fails at launch.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && playwright install --with-deps chromium
 COPY backend/ .
 
 # Copy pre-built frontend from stage 1 into correct path relative to backend
@@ -29,5 +32,7 @@ COPY --from=frontend-builder /app/frontend/dist ./dist
 EXPOSE 8000
 WORKDIR /app/backend
 
-# Startup command
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Startup command. One worker: each worker process runs its own Chromium,
+# cache and 8-request concurrency budget, so extra workers multiply memory
+# use and the request bursts GeM's WAF blocks.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

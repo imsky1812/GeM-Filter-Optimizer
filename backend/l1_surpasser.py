@@ -889,7 +889,10 @@ class L1ChainSurpasser:
             try:
                 full_data = scraper.scrape()
                 self._api_calls += full_data["scrape_stats"]["pages_fetched"]
-            except (DataInstabilityError, IncompleteScrapeError) as e:
+            except Exception as e:
+                # DataInstabilityError / IncompleteScrapeError, or a fetch that
+                # exhausted its retries (RuntimeError from BrowserManager) --
+                # report a failed scrape instead of crashing the request.
                 logger.error(f"[L1Surpass] Scrape failed at iteration {iteration}: {e}")
                 self._iteration_log.append({
                     "iteration": iteration,

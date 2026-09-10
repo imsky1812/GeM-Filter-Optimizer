@@ -305,10 +305,23 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         if k and v:
             start_filters[k] = v
 
-    # Filter products matching active conditions
-    def matches_filters(product_specs, active_dict):
-        for k, v in active_dict.items():
-            val = product_specs.get(k)
+    # Compare spec values the same way BFS expansion picks them: trimmed and
+    # case-insensitive. An exact comparison here disagreed with expansion --
+    # a product listing "MESH" was dropped under the filter value "Mesh",
+    # counting a real competitor as eliminated.
+    def norm_value(v):
+        return str(v).strip().lower()
+
+    def normalize_active(active_dict):
+        return {k: norm_value(v) for k, v in active_dict.items()}
+
+    for p in products:
+        p["norm_specs"] = {k: norm_value(v) for k, v in p["specs"].items()}
+
+    # Filter products matching active conditions (both sides normalized)
+    def matches_filters(norm_specs, active_norm):
+        for k, v in active_norm.items():
+            val = norm_specs.get(k)
             if val is None:
                 # Spec data is missing - treat as matching (conservative)
                 continue
@@ -316,7 +329,8 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 return False
         return True
 
-    start_products = [p for p in products if matches_filters(p["specs"], start_filters)]
+    start_norm = normalize_active(start_filters)
+    start_products = [p for p in products if matches_filters(p["norm_specs"], start_norm)]
 
     # Establish original min price and seller count
     market_min_price = min((p["price"] for p in start_products), default=None)
@@ -325,7 +339,8 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
 
     # Helper to evaluate filter state locally
     def evaluate_state(active_dict):
-        matched = [p for p in start_products if matches_filters(p["specs"], active_dict)]
+        active_norm = normalize_active(active_dict)
+        matched = [p for p in start_products if matches_filters(p["norm_specs"], active_norm)]
         prices = [p["price"] for p in matched]
         return {
             "products": matched,
@@ -371,10 +386,10 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 continue
 
             # Restrict expansion to only values present in the matching products
-            allowed_values = {str(p["specs"].get(key)).strip().lower() for p in eval_res["products"] if p["specs"].get(key)}
+            allowed_values = {p["norm_specs"][key] for p in eval_res["products"] if p["norm_specs"].get(key)}
 
             for val in gf.get("values", []):
-                if str(val).strip().lower() not in allowed_values:
+                if norm_value(val) not in allowed_values:
                     continue
 
                 next_active = dict(curr_active)
