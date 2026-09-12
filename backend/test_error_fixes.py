@@ -194,9 +194,64 @@ def test_surgical_strike_failed_check_is_not_untapped():
         golden_filters=[{"filterKey": "c_color", "filterName": "Color", "isGolden": True,
                          "values": ["Red", "Blue"]}],
     )
-    check(f"no untapped niches reported (got {result['untapped']})", result["untapped"] == 0)
     check("the failed check produced no counter-filter", result["counterFilters"] == [])
+    check(f"nothing is claimed as verified (got unverified={result['unverified']})", result["unverified"] == 0)
     check(f"the failure is counted (got failedChecks={result.get('failedChecks')})", result.get("failedChecks") == 1)
+
+
+def make_strike_scraper(total, catalog_min_price=6000):
+    """GeMScraper whose competitor page is fixed and whose category query
+    returns `total` results."""
+    class FakeStrikeScraper(GeMScraper):
+        def _fetch(self, url, retries=3):
+            if "format=json" in url:
+                catalogs = ([{"final_price": {"value": catalog_min_price}}] if total else [])
+                return json.dumps({"number_of_results": total, "catalogs": catalogs})
+            return ('<html><body><h1>Competitor</h1><div id="feature_groups">'
+                    '<table><tr><td>Color</td><td>Red</td></tr></table></div></body></html>')
+    return FakeStrikeScraper()
+
+
+GOLDEN_COLOR = [{"filterKey": "c_color", "filterName": "Color", "isGolden": True,
+                 "values": ["Red", "Blue"]}]
+
+
+def run_strike(scraper, location=""):
+    return scraper.surgical_strike(
+        product_url="https://mkp.gem.gov.in/p-competitor",
+        category_url="https://mkp.gem.gov.in/some-category/search",
+        target_price=5000,
+        golden_filters=GOLDEN_COLOR,
+        location=location,
+    )
+
+
+def test_zero_results_is_not_an_untapped_niche():
+    print("\n[6] A counter-filter GeM returns 0 results for is flagged unrecognized, not untapped")
+    result = run_strike(make_strike_scraper(total=0))
+    cf = result["counterFilters"][0]
+    check(f"verification says unrecognized (got {cf['verification']!r})", cf["verification"] == "unrecognized")
+    check("it is not presented as a win", cf["wouldWin"] is False)
+    check("the old untapped claim is gone", "isUntapped" not in cf)
+    check(f"it counts as unverified (got {result['unverified']})", result["unverified"] == 1)
+    check("no untapped tally is reported at all", "untapped" not in result)
+
+
+def test_zero_results_with_a_location_is_only_unverified():
+    print("\n[7] With a location applied, an empty result is 'unverified' -- it could be genuine")
+    result = run_strike(make_strike_scraper(total=0), location="Kerala")
+    check(f"verification says unverified (got {result['counterFilters'][0]['verification']!r})",
+          result["counterFilters"][0]["verification"] == "unverified")
+
+
+def test_real_results_are_confirmed_and_can_win():
+    print("\n[8] A counter-filter with real results is confirmed, and wins when it beats the target")
+    result = run_strike(make_strike_scraper(total=12, catalog_min_price=6000))
+    cf = result["counterFilters"][0]
+    check(f"verification says confirmed (got {cf['verification']!r})", cf["verification"] == "confirmed")
+    check("min price 6000 beats the 5000 target, so it's a win", cf["wouldWin"] is True)
+    check(f"win is tallied (got wins={result['wins']})", result["wins"] == 1)
+    check(f"nothing is left unverified (got {result['unverified']})", result["unverified"] == 0)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -255,7 +310,7 @@ def test_require_gem_url():
 # ───────────────────────────────────────────────────────────────────────────
 
 def test_seller_key_uses_external_ref_id():
-    print("\n[8] seller ids come from GeM's external_ref_id, not the absent id field")
+    print("\n[9] seller ids come from GeM's external_ref_id, not the absent id field")
     from gem_utils import seller_key
     # Shape taken from a real GeM catalog response: no "id" anywhere.
     real = {"name": "KRISHNA ENTERPRISES", "external_ref_id": "Comp9eb0c8aa",
@@ -279,6 +334,9 @@ if __name__ == "__main__":
     test_fetch_waits_for_real_html_pages()
     test_chain_hunt_spec_match_ignores_case()
     test_surgical_strike_failed_check_is_not_untapped()
+    test_zero_results_is_not_an_untapped_niche()
+    test_zero_results_with_a_location_is_only_unverified()
+    test_real_results_are_confirmed_and_can_win()
     test_l1_run_reports_fetch_failure()
     test_require_gem_url()
     test_seller_key_uses_external_ref_id()

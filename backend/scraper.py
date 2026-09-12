@@ -207,6 +207,13 @@ class GeMScraper:
         api_calls = 0
         failed_checks = 0
 
+        # A location or a category-URL query narrows the search beyond the single
+        # counter-filter, so an empty result there could be genuine. Without one,
+        # an empty result cannot be (see the verification note below).
+        has_extra_scope = bool(base_extra) or bool(
+            location and location.lower() not in ("", "all india", "all")
+        )
+
         for match in matches:
             competitor_val = match["competitorValue"].strip()
 
@@ -233,6 +240,21 @@ class GeMScraper:
                 total = scrape_result.get("total", 0)
                 min_price = scrape_result.get("min_price")
 
+                # Zero results is NOT an untapped niche. These filter values come
+                # from this category's own listings, so GeM returning nothing for
+                # one of them means its search index doesn't accept the literal
+                # text -- the same rejection the chain hunt flags as "unconfirmed".
+                # Confirmed live: 168 of 244 printers in a category are
+                # "Monochrome (Black)", yet querying that value returns 0.
+                # Reporting that as an empty niche sends the seller after a niche
+                # that does not exist.
+                if total > 0:
+                    verification = "confirmed"
+                elif has_extra_scope:
+                    verification = "unverified"
+                else:
+                    verification = "unrecognized"
+
                 counter_filters.append({
                     "filterKey": match["filterKey"],
                     "filterName": match["filterName"],
@@ -240,13 +262,15 @@ class GeMScraper:
                     "counterValue": alt_val_clean,
                     "resultTotal": total,
                     "resultMinPrice": min_price,
-                    "wouldWin": min_price is not None and min_price > target_price,
-                    "isUntapped": total == 0,
+                    "wouldWin": (verification == "confirmed"
+                                 and min_price is not None and min_price > target_price),
+                    "verification": verification,
                 })
 
-        # Sort: wins first, then by highest min price
+        # Sort: wins first, then verified non-wins, then anything unverified
+        _rank = {"confirmed": 1, "unrecognized": 2, "unverified": 2}
         counter_filters.sort(key=lambda x: (
-            0 if x["wouldWin"] else (1 if x["isUntapped"] else 2),
+            0 if x["wouldWin"] else _rank.get(x["verification"], 3),
             -(x["resultMinPrice"] or 0),
         ))
 
@@ -261,7 +285,7 @@ class GeMScraper:
             "failedChecks": failed_checks,
             "elapsed": round(time.time() - t_start, 1),
             "wins": sum(1 for cf in counter_filters if cf["wouldWin"]),
-            "untapped": sum(1 for cf in counter_filters if cf["isUntapped"]),
+            "unverified": sum(1 for cf in counter_filters if cf["verification"] != "confirmed"),
         }
 
     def _enrich_single_product(self, product: dict, name_to_code: dict) -> dict:

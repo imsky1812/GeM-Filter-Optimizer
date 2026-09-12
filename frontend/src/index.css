@@ -1410,7 +1410,7 @@ input:focus {
   border-color: var(--success);
 }
 
-.counter-filter-row[data-untapped="true"] {
+.counter-filter-row[data-unverified="true"] {
   background: var(--amber-glow);
   border-color: var(--amber);
 }
@@ -1431,7 +1431,7 @@ input:focus {
   background: var(--success-glow);
 }
 
-.counter-icon[data-untapped="true"] {
+.counter-icon[data-unverified="true"] {
   background: var(--amber-glow);
 }
 
@@ -1467,7 +1467,7 @@ input:focus {
   color: var(--success);
 }
 
-.counter-badge-untapped {
+.counter-badge-unverified {
   background: var(--amber-glow);
   color: var(--amber);
 }

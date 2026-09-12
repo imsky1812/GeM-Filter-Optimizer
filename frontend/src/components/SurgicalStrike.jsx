@@ -1,4 +1,4 @@
-import { Target, ArrowClockwise, CheckCircle, Star, ArrowRight, Warning, Trophy } from "@phosphor-icons/react";
+import { Target, ArrowClockwise, CheckCircle, ArrowRight, Warning, Trophy } from "@phosphor-icons/react";
 
 export default function SurgicalStrike({
   strikeUrl,
@@ -120,52 +120,57 @@ export default function SurgicalStrike({
           {strikeResults.counterFilters?.length > 0 ? (
             <>
               <div className="section-sub-header">
-                Counter Filters ({strikeResults.wins} wins, {strikeResults.untapped} untapped):
+                Counter Filters ({strikeResults.wins} wins, {strikeResults.unverified} unverified):
               </div>
               <div className="flex-column-gap-8">
-                {strikeResults.counterFilters.map((cf, idx) => (
-                  <div
-                    key={idx}
-                    className="counter-filter-row"
-                    data-win={cf.wouldWin ? "true" : "false"}
-                    data-untapped={cf.isUntapped ? "true" : "false"}
-                    style={{ "--stagger-i": idx }}
-                  >
+                {strikeResults.counterFilters.map((cf, idx) => {
+                  const unverified = cf.verification !== "confirmed";
+                  return (
                     <div
-                      className="counter-icon"
+                      key={idx}
+                      className="counter-filter-row"
                       data-win={cf.wouldWin ? "true" : "false"}
-                      data-untapped={cf.isUntapped ? "true" : "false"}
+                      data-unverified={unverified ? "true" : "false"}
+                      style={{ "--stagger-i": idx }}
                     >
-                      {cf.wouldWin ? (
-                        <CheckCircle size={16} weight="fill" />
-                      ) : cf.isUntapped ? (
-                        <Star size={16} weight="fill" />
-                      ) : (
-                        <ArrowRight size={14} weight="bold" />
-                      )}
-                    </div>
-                    <div className="counter-info">
-                      <div className="counter-info-main">
-                        Set <strong>{cf.filterName}</strong> = <strong className="color-success">{cf.counterValue}</strong>
-                        <span className="counter-competitor-value">
-                          (competitor has: {cf.competitorValue})
-                        </span>
-                      </div>
-                      <div className="counter-info-sub">
-                        {cf.isUntapped ? (
-                          <><Trophy size={13} weight="fill" className="inline-icon" /> Zero competitors. Untapped niche!</>
-                        ) : cf.wouldWin ? (
-                          <><Trophy size={13} weight="fill" className="inline-icon" /> You'd be L1! Min price: ₹{cf.resultMinPrice?.toLocaleString()}, {cf.resultTotal} products</>
+                      <div
+                        className="counter-icon"
+                        data-win={cf.wouldWin ? "true" : "false"}
+                        data-unverified={unverified ? "true" : "false"}
+                      >
+                        {cf.wouldWin ? (
+                          <CheckCircle size={16} weight="fill" />
+                        ) : unverified ? (
+                          <Warning size={16} weight="fill" />
                         ) : (
-                          `Min price: ₹${cf.resultMinPrice?.toLocaleString() ?? "?"}, ${cf.resultTotal} products`
+                          <ArrowRight size={14} weight="bold" />
                         )}
                       </div>
+                      <div className="counter-info">
+                        <div className="counter-info-main">
+                          Set <strong>{cf.filterName}</strong> = <strong className="color-success">{cf.counterValue}</strong>
+                          <span className="counter-competitor-value">
+                            (competitor has: {cf.competitorValue})
+                          </span>
+                        </div>
+                        <div className="counter-info-sub">
+                          {cf.verification === "unrecognized" ? (
+                            "GeM returned nothing for a value its own listings use, so its search doesn't accept this text. Check it on GeM before relying on it."
+                          ) : cf.verification === "unverified" ? (
+                            "No results with your location or category search applied. Could be genuinely empty, or a value GeM's search doesn't accept. Worth checking manually."
+                          ) : cf.wouldWin ? (
+                            <><Trophy size={13} weight="fill" className="inline-icon" /> You'd be L1! Min price: ₹{cf.resultMinPrice?.toLocaleString()}, {cf.resultTotal} products</>
+                          ) : (
+                            `Min price: ₹${cf.resultMinPrice?.toLocaleString() ?? "?"}, ${cf.resultTotal} products`
+                          )}
+                        </div>
+                      </div>
+                      <div className={`counter-badge ${cf.wouldWin ? "counter-badge-win" : unverified ? "counter-badge-unverified" : "counter-badge-no"}`}>
+                        {cf.wouldWin ? "WIN" : unverified ? "UNVERIFIED" : "NO WIN"}
+                      </div>
                     </div>
-                    <div className={`counter-badge ${cf.wouldWin ? "counter-badge-win" : cf.isUntapped ? "counter-badge-untapped" : "counter-badge-no"}`}>
-                      {cf.wouldWin ? "WIN" : cf.isUntapped ? "UNTAPPED" : "NO WIN"}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           ) : strikeResults.goldenMatches?.length === 0 ? (
