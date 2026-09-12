@@ -154,7 +154,9 @@ export default function SurgicalStrike({
                           </span>
                         </div>
                         <div className="counter-info-sub">
-                          {cf.verification === "unrecognized" ? (
+                          {cf.verification === "ignored" ? (
+                            "GeM ignored this filter and answered for the whole category, so nothing was verified here."
+                          ) : cf.verification === "unrecognized" ? (
                             "GeM returned nothing for a value its own listings use, so its search doesn't accept this text. Check it on GeM before relying on it."
                           ) : cf.verification === "unverified" ? (
                             "No results with your location or category search applied. Could be genuinely empty, or a value GeM's search doesn't accept. Worth checking manually."

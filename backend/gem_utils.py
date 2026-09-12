@@ -102,18 +102,33 @@ def to_key(name: str) -> str:
 def normalize_filter_value(val) -> str:
     """
     Normalize a spec filter value for the GeM search JSON API index.
-    E.g. "Brown / Tan" -> "Brown", "1000 : 1" -> "1000 1".
+    E.g. "Brown / Tan" -> "Brown", "Mesh fabrics" -> "Meshfabrics".
 
-    Do NOT strip spaces: live-tested against a real category (multi-word
-    facet like "Polyester fabric") and stripping doesn't match GeM's index --
-    it silently corrupts the query into an unrelated, inflated result count
-    instead of a clean "not found". urlencode() handles space encoding.
+    GeM's index only matches multi-word spec values with the spaces removed.
+    Measured live against three categories (every other encoding -- "+",
+    "%20", a literal space, `key[]=`, quoted, upper/lowercase, hyphen, comma,
+    repeated params -- returns 0):
+
+        C6065E=Mesh fabrics   -> 0          C6065E=Meshfabrics       -> 11,112
+        C8113E=Monochrome (Black) -> 0      C8113E=Monochrome(Black) -> 168
+
+    The stripped queries select the right products (three sampled product
+    pages all listed "Seat upholstery: Mesh fabrics") and partition the
+    category exactly: for printers, Monochrome(Black) 168 + Colour 76 = 244,
+    the full category.
+
+    An earlier commit removed the stripping, believing it "corrupts the query
+    into an unrelated, inflated result count". That inflation is real but has
+    a different cause: GeM silently IGNORES a filter parameter whose key it
+    doesn't recognise and returns the unfiltered total. Callers guard against
+    that by comparing a filtered total against the category's baseline, not
+    by leaving the spaces in.
     """
     if not isinstance(val, str):
         return str(val)
     if "/" in val:
         val = val.split("/")[0]
-    return val.replace(":", "").strip()
+    return val.replace(":", "").replace(" ", "").strip()
 
 
 def parse_fragment_params(fragment: str) -> dict:

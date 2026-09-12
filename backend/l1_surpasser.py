@@ -33,6 +33,7 @@ from gem_utils import (
     extract_specs_from_soup,
     make_name_resolver,
     names_match as _names_match,
+    normalize_filter_value,
     parse_fragment_params,
     parse_price,
     pull_facet_values,
@@ -181,8 +182,10 @@ class GeMCategoryScraper:
             if k.lower() not in ("page", "format"):
                 params[k] = v
 
-        # Merge active golden filters
-        params.update(self._active_filters)
+        # Merge active golden filters (normalized the way GeM's index matches
+        # them -- multi-word values only match with their spaces removed)
+        for k, v in self._active_filters.items():
+            params[k] = normalize_filter_value(v)
 
         return f"{self._base_url}?{urlencode(params)}"
 

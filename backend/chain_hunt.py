@@ -617,6 +617,13 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         # product pages -- shows genuine matches). We can't tell "real GeM 0" apart from "GeM doesn't
         # recognize this filter value" per-facet, so rather than silently discarding a strong local
         # candidate as fake, surface it as unconfirmed instead of throwing it away.
+        # GeM ignored the filter parameters and answered for the whole
+        # category, so this tells us nothing about the niche.
+        if live_res.get("ignored"):
+            logger.warning(f"[IMCDS] Live check for path {steps_list} was ignored by GeM. Marking unconfirmed.")
+            unconfirmed_candidates.append((active_dict, steps_list, local_eval))
+            continue
+
         if is_untapped and local_eval["total"] > 0:
             logger.warning(f"[IMCDS] Mismatch detected: live total=0 but local total={local_eval['total']} for path {steps_list}. Marking unconfirmed instead of discarding.")
             unconfirmed_candidates.append((active_dict, steps_list, local_eval))

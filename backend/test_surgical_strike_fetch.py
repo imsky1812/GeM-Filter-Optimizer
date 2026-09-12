@@ -53,9 +53,14 @@ class FakeFetchScraper(GeMScraper):
         self._product_specs_cache = {}
 
     def _fetch(self, url, retries=3):
-        if "format=json" in url:
-            # Category listing page: one competitor at 6000, above target_price
+        if "c_color=" in url:
+            # Filtered category listing: one competitor at 6000, above target_price
             body = {"number_of_results": 1, "catalogs": [{"final_price": {"value": 6000}}]}
+            return json.dumps(body)
+        if "format=json" in url:
+            # Unfiltered category baseline (must differ from the filtered total,
+            # or the "GeM ignored our filter" guard would fire)
+            body = {"number_of_results": 40, "catalogs": [{"final_price": {"value": 3000}}]}
             return json.dumps(body)
         # Product detail page
         return PRODUCT_HTML

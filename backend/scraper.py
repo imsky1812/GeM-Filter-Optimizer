@@ -214,6 +214,13 @@ class GeMScraper:
             location and location.lower() not in ("", "all india", "all")
         )
 
+        # Unfiltered total for this category. GeM silently ignores a filter key
+        # it doesn't recognise and answers for the whole category, so a check
+        # that matches this number verified nothing.
+        baseline = self._fast_price_scrape(category_url_clean, dict(base_extra or {}), location)
+        baseline_total = 0 if baseline.get("error") else baseline.get("total", 0)
+        api_calls += 1
+
         for match in matches:
             competitor_val = match["competitorValue"].strip()
 
@@ -248,7 +255,9 @@ class GeMScraper:
                 # "Monochrome (Black)", yet querying that value returns 0.
                 # Reporting that as an empty niche sends the seller after a niche
                 # that does not exist.
-                if total > 0:
+                if baseline_total and total == baseline_total:
+                    verification = "ignored"
+                elif total > 0:
                     verification = "confirmed"
                 elif has_extra_scope:
                     verification = "unverified"
@@ -268,7 +277,7 @@ class GeMScraper:
                 })
 
         # Sort: wins first, then verified non-wins, then anything unverified
-        _rank = {"confirmed": 1, "unrecognized": 2, "unverified": 2}
+        _rank = {"confirmed": 1, "unrecognized": 2, "unverified": 2, "ignored": 3}
         counter_filters.sort(key=lambda x: (
             0 if x["wouldWin"] else _rank.get(x["verification"], 3),
             -(x["resultMinPrice"] or 0),

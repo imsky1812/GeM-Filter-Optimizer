@@ -199,14 +199,17 @@ def test_surgical_strike_failed_check_is_not_untapped():
     check(f"the failure is counted (got failedChecks={result.get('failedChecks')})", result.get("failedChecks") == 1)
 
 
-def make_strike_scraper(total, catalog_min_price=6000):
-    """GeMScraper whose competitor page is fixed and whose category query
-    returns `total` results."""
+def make_strike_scraper(total, catalog_min_price=6000, baseline_total=40):
+    """GeMScraper whose competitor page is fixed, whose filtered category query
+    returns `total` results, and whose unfiltered baseline is `baseline_total`."""
     class FakeStrikeScraper(GeMScraper):
         def _fetch(self, url, retries=3):
-            if "format=json" in url:
+            if "c_color=" in url:
                 catalogs = ([{"final_price": {"value": catalog_min_price}}] if total else [])
                 return json.dumps({"number_of_results": total, "catalogs": catalogs})
+            if "format=json" in url:
+                return json.dumps({"number_of_results": baseline_total,
+                                   "catalogs": [{"final_price": {"value": 3000}}]})
             return ('<html><body><h1>Competitor</h1><div id="feature_groups">'
                     '<table><tr><td>Color</td><td>Red</td></tr></table></div></body></html>')
     return FakeStrikeScraper()
@@ -242,6 +245,16 @@ def test_zero_results_with_a_location_is_only_unverified():
     result = run_strike(make_strike_scraper(total=0), location="Kerala")
     check(f"verification says unverified (got {result['counterFilters'][0]['verification']!r})",
           result["counterFilters"][0]["verification"] == "unverified")
+
+
+def test_filter_ignored_by_gem_is_not_a_result():
+    print("\n[8] A filter GeM ignored (result == the whole category) verifies nothing")
+    # Filtered query returns exactly the unfiltered baseline: GeM dropped the key.
+    result = run_strike(make_strike_scraper(total=40, baseline_total=40))
+    cf = result["counterFilters"][0]
+    check(f"verification says ignored (got {cf['verification']!r})", cf["verification"] == "ignored")
+    check("it is not presented as a win", cf["wouldWin"] is False)
+    check(f"it counts as unverified (got {result['unverified']})", result["unverified"] == 1)
 
 
 def test_real_results_are_confirmed_and_can_win():
@@ -328,6 +341,53 @@ def test_seller_key_uses_external_ref_id():
           l1_surpasser.GeMCategoryScraper._parse_product(cat)["seller_id"] == "Comp9eb0c8aa")
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# 7. Multi-word filter values
+# ───────────────────────────────────────────────────────────────────────────
+
+def test_multi_word_values_have_spaces_stripped():
+    print("\n[11] Multi-word filter values are sent with spaces stripped, the only form GeM matches")
+    from gem_utils import normalize_filter_value as norm
+    check("'Mesh fabrics' -> 'Meshfabrics'", norm("Mesh fabrics") == "Meshfabrics")
+    check("'Monochrome (Black)' keeps its brackets", norm("Monochrome (Black)") == "Monochrome(Black)")
+    check("single words are unchanged", norm("Leatherette") == "Leatherette")
+    check("a slashed value still takes the first option", norm("Brown / Tan") == "Brown")
+    check("non-strings survive", norm(12) == "12")
+
+
+class IgnoredLiveCheckScraper(CaseFakeScraper):
+    """Live verification comes back flagged as ignored by GeM."""
+
+    def _chain_scrape(self, url, extra_params, location=""):
+        return {"min_price": 500, "total": 2, "seller_count": 2,
+                "products": [], "error": False, "ignored": True}
+
+
+def test_chain_hunt_treats_an_ignored_live_check_as_unconfirmed():
+    print("\n[12] A live check GeM ignored becomes an unconfirmed lead, never a verified path")
+    result = chain_hunt.smart_l1_discovery(
+        IgnoredLiveCheckScraper(),
+        category_url="https://mkp.gem.gov.in/some-category/search",
+        target_price=1000,
+        golden_filters=[{"filterKey": "color", "filterName": "Color", "isGolden": True,
+                         "values": ["Mesh", "Fabric"]}],
+    )
+    check("no path is reported as verified", result["winningPaths"] == [])
+    check(f"the leads are surfaced as unconfirmed (got {len(result['unconfirmedPaths'])})",
+          len(result["unconfirmedPaths"]) > 0)
+
+
+def test_l1_page_url_normalizes_filter_values():
+    print("\n[13] The L1 surpasser sends normalized filter values too")
+    scraper = l1_surpasser.GeMCategoryScraper(
+        category_url="https://mkp.gem.gov.in/some-category/search",
+        active_filters={"C6065E": "Mesh fabrics"},
+    )
+    url = scraper._build_page_url(1)
+    check(f"value is space-stripped in the query (got {url.split('C6065E=')[-1]!r})",
+          "C6065E=Meshfabrics" in url)
+
+
 if __name__ == "__main__":
     test_extract_json_text()
     test_fetch_returns_raw_json_body()
@@ -336,6 +396,10 @@ if __name__ == "__main__":
     test_surgical_strike_failed_check_is_not_untapped()
     test_zero_results_is_not_an_untapped_niche()
     test_zero_results_with_a_location_is_only_unverified()
+    test_filter_ignored_by_gem_is_not_a_result()
+    test_multi_word_values_have_spaces_stripped()
+    test_chain_hunt_treats_an_ignored_live_check_as_unconfirmed()
+    test_l1_page_url_normalizes_filter_values()
     test_real_results_are_confirmed_and_can_win()
     test_l1_run_reports_fetch_failure()
     test_require_gem_url()

@@ -51,6 +51,11 @@ from gem_utils import (
 
 logger = logging.getLogger("gem-crawler")
 
+# Unfiltered result count per category, so a filtered query can be checked
+# against it (see _unfiltered_total_async). {(base_url, location, base_params): (ts, total)}
+_baseline_cache: dict = {}
+_BASELINE_TTL = 900
+
 # Substrings seen in real crashes of the underlying Playwright driver
 # connection (e.g. the Chromium process dying mid-session). Playwright's own
 # Browser.is_connected() does NOT reliably flip to False for these -- it's
@@ -700,8 +705,42 @@ class GeMCrawler:
             logger.error(f"[Crawler] Filtered crawl failed: {e}")
             return {"min_price": None, "total": 0, "product_count": 0, "seller_count": 0, "error": True}
 
+    async def _unfiltered_total_async(self, page, base_url: str, location: str, base_params: dict):
+        """
+        Result count for this category with no spec filters applied, cached
+        per category. Used to spot a filter GeM silently ignored: an
+        unrecognised key is dropped rather than rejected, and the response
+        then describes the whole category while looking like a real answer.
+        """
+        key = (base_url, (location or "").lower(), tuple(sorted(base_params.items())))
+        cached = _baseline_cache.get(key)
+        if cached and time.time() - cached[0] < _BASELINE_TTL:
+            return cached[1]
+
+        query = {"page": 1, "format": "json"}
+        for k, v in base_params.items():
+            if k.lower() not in ("page", "format", "sort_type"):
+                query[k] = normalize_filter_value(v)
+        if location and location.lower() not in ("", "all india", "all"):
+            query["localized_search"] = location
+
+        try:
+            response = await page.goto(f"{base_url}?{urlencode(query)}", timeout=20000,
+                                       wait_until="domcontentloaded")
+            json_text = _extract_json_text(await _page_body(page, response))
+            if json_text is None:
+                return None
+            total = json.loads(json_text).get("number_of_results", 0)
+        except Exception as e:
+            logger.warning(f"[Crawler] Baseline total fetch failed for {base_url}: {e}")
+            return None
+
+        _baseline_cache[key] = (time.time(), total)
+        return total
+
     async def _crawl_filtered_prices_async(self, url: str, filters: dict, location: str) -> dict:
         base_url, fragment_params = self._normalize_url(url)
+        base_params = {k: v for k, v in fragment_params.items() if k not in filters}
         fragment_params.update(filters)
 
         page = await self._bm.acquire_page_async()
@@ -787,6 +826,19 @@ class GeMCrawler:
                 except Exception:
                     pass
 
+            # Did GeM actually apply our filters? An unrecognised key is
+            # silently dropped, and the response then describes the whole
+            # category -- a wrong answer that looks like a real one.
+            ignored = False
+            if filters:
+                baseline = await self._unfiltered_total_async(page, base_url, location, base_params)
+                if baseline and total == baseline:
+                    logger.warning(
+                        f"[Crawler] Filters {list(filters)} returned the unfiltered category "
+                        f"total ({total}) -- GeM ignored them, so this is not a verification."
+                    )
+                    ignored = True
+
             return {
                 "min_price": min(prices) if prices else None,
                 "total": total,
@@ -794,6 +846,7 @@ class GeMCrawler:
                 "seller_count": len(sellers),
                 "products": products_out,
                 "error": False,
+                "ignored": ignored,
             }
         finally:
             await self._bm.release_page_async(page)
