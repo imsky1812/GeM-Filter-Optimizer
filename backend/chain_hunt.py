@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote, urlencode
 
-from gem_utils import make_name_resolver
+from gem_utils import make_name_resolver, seller_key
 
 logger = logging.getLogger("chain-hunt")
 
@@ -138,7 +138,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             "price": price,
             "name": cat.get("title", ""),
             "brand": cat.get("brand", ""),
-            "seller_id": str(cat.get("seller", {}).get("id", "")),
+            "seller_id": seller_key(cat.get("seller", {})),
             "seller_name": cat.get("seller", {}).get("name", ""),
             "oem_id": str(cat.get("oem_id", "")),
             "productUrl": self._build_product_url(cat),

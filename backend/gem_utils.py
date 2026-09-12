@@ -62,6 +62,25 @@ def make_name_resolver(names, match=names_match):
     return resolve
 
 
+def seller_key(seller: dict) -> str:
+    """
+    Stable identifier for a seller in GeM's catalog JSON.
+
+    GeM's seller object carries no "id" -- it uses "external_ref_id".
+    Reading "id" left every seller_id empty, so seller counts came out 0:
+    enough to downgrade real chain-hunt wins to PARTIAL and to make every
+    L1 candidate look like it had too few sellers. Fall back to the
+    display name so a seller is still counted if the ref id is missing.
+    """
+    if not isinstance(seller, dict):
+        return ""
+    for key in ("external_ref_id", "id", "seller_id"):
+        val = str(seller.get(key) or "").strip()
+        if val:
+            return val
+    return str(seller.get("name") or "").strip()
+
+
 def parse_price(text: str):
     """Parse a price string into an integer, or None if it isn't a plausible price."""
     cleaned = re.sub(r'[₹,\s]', '', text)

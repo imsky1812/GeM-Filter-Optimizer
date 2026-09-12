@@ -250,6 +250,29 @@ def test_require_gem_url():
     check("empty URL is rejected", rejected(""))
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# 6. Seller ids
+# ───────────────────────────────────────────────────────────────────────────
+
+def test_seller_key_uses_external_ref_id():
+    print("\n[8] seller ids come from GeM's external_ref_id, not the absent id field")
+    from gem_utils import seller_key
+    # Shape taken from a real GeM catalog response: no "id" anywhere.
+    real = {"name": "KRISHNA ENTERPRISES", "external_ref_id": "Comp9eb0c8aa",
+            "display_sold_as": "OEM", "rating": "4.5"}
+    check("real GeM seller object yields its external_ref_id", seller_key(real) == "Comp9eb0c8aa")
+    check("falls back to the seller name when no ref id is present",
+          seller_key({"name": "L & P INTERNATIONAL"}) == "L & P INTERNATIONAL")
+    check("an empty seller object yields an empty id", seller_key({}) == "")
+
+    cat = {"id": "1-2", "final_price": {"value": 100}, "title": "t", "seller": real}
+    gc = crawler_mod.GeMCrawler.__new__(crawler_mod.GeMCrawler)
+    check("crawler product carries a non-empty seller_id",
+          gc._parse_catalog_item(cat)["seller_id"] == "Comp9eb0c8aa")
+    check("l1 surpasser product carries a non-empty seller_id",
+          l1_surpasser.GeMCategoryScraper._parse_product(cat)["seller_id"] == "Comp9eb0c8aa")
+
+
 if __name__ == "__main__":
     test_extract_json_text()
     test_fetch_returns_raw_json_body()
@@ -258,6 +281,7 @@ if __name__ == "__main__":
     test_surgical_strike_failed_check_is_not_untapped()
     test_l1_run_reports_fetch_failure()
     test_require_gem_url()
+    test_seller_key_uses_external_ref_id()
 
     print(f"\n{'='*60}\n{PASS} passed, {FAIL} failed\n{'='*60}")
     sys.exit(1 if FAIL else 0)

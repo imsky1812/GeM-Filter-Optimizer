@@ -45,6 +45,7 @@ from gem_utils import (
     parse_fragment_params,
     parse_price,
     pull_facet_values,
+    seller_key,
     to_key,
 )
 
@@ -744,7 +745,7 @@ class GeMCrawler:
                 if price <= 0:
                     continue
                 prices.append(price)
-                sid = str(cat.get("seller", {}).get("id", ""))
+                sid = seller_key(cat.get("seller", {}))
                 if sid:
                     sellers.add(sid)
                 products_out.append({
@@ -771,7 +772,7 @@ class GeMCrawler:
                             if price <= 0:
                                 continue
                             prices.append(price)
-                            sid = str(cat.get("seller", {}).get("id", ""))
+                            sid = seller_key(cat.get("seller", {}))
                             if sid:
                                 sellers.add(sid)
                             products_out.append({
@@ -1206,7 +1207,7 @@ class GeMCrawler:
             "brand": cat.get("brand", ""),
             "seller": cat.get("seller", {}).get("name", ""),
             "seller_name": cat.get("seller", {}).get("name", ""),
-            "seller_id": str(cat.get("seller", {}).get("id", "")),
+            "seller_id": seller_key(cat.get("seller", {})),
             "sellerType": cat.get("seller", {}).get("display_sold_as", ""),
             "rating": cat.get("seller", {}).get("rating", ""),
             "listPrice": int(cat.get("list_price", {}).get("value", 0)),

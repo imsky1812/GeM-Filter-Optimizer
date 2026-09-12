@@ -36,6 +36,7 @@ from gem_utils import (
     parse_fragment_params,
     parse_price,
     pull_facet_values,
+    seller_key,
     to_key,
 )
 
@@ -254,7 +255,7 @@ class GeMCategoryScraper:
             "price": price,
             "name": cat.get("title", ""),
             "brand": cat.get("brand", ""),
-            "seller_id": str(seller_info.get("id", "")),
+            "seller_id": seller_key(seller_info),
             "seller_name": seller_info.get("name", ""),
             "oem_id": str(cat.get("oem_id", "")),
             "product_url": product_url,
