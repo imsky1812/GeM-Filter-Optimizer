@@ -128,8 +128,17 @@ def normalize_filter_value(val) -> str:
         return str(val)
     if "/" in val:
         val = val.split("/")[0]
-    return val.replace(":", "").replace(" ", "").strip()
+    for ch in _INDEX_DROPPED_CHARS:
+        val = val.replace(ch, "")
+    return val.strip()
 
+
+# Characters GeM's search index drops from a spec value. Brackets and hyphens
+# are NOT dropped -- "Monochrome(Black)" and "Wi-Fi" both match as-is -- but a
+# space, a colon or an "@" must go. Measured live on the desktop-computer
+# category: C5928E=HDD@7200RPM returns 0 (encoded or literal), while
+# C5928E=HDD7200RPM returns 882.
+_INDEX_DROPPED_CHARS = (" ", ":", "@")
 
 ID_FACET_TYPE = "MultiselectAnd"
 

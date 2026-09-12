@@ -351,6 +351,8 @@ def test_multi_word_values_have_spaces_stripped():
     check("'Mesh fabrics' -> 'Meshfabrics'", norm("Mesh fabrics") == "Meshfabrics")
     check("'Monochrome (Black)' keeps its brackets", norm("Monochrome (Black)") == "Monochrome(Black)")
     check("single words are unchanged", norm("Leatherette") == "Leatherette")
+    check("'HDD @7200RPM' -> 'HDD7200RPM' (the index drops @)", norm("HDD @7200RPM") == "HDD7200RPM")
+    check("hyphens survive", norm("Wi-Fi") == "Wi-Fi")
     check("a slashed value still takes the first option", norm("Brown / Tan") == "Brown")
     check("non-strings survive", norm(12) == "12")
 
