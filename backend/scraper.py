@@ -23,6 +23,8 @@ from gem_utils import (
     parse_fragment_params,
     parse_price,
     pull_facet_values,
+    query_values_for,
+    split_composite_value,
     to_key,
 )
 
@@ -183,6 +185,7 @@ class GeMScraper:
                     "filterName": gf["filterName"],
                     "filterKey": gf["filterKey"],
                     "values": gf.get("values", []) or gf.get("facetValues", []),
+                    "type": gf.get("type", ""),
                 }
 
         # Step 3: Match competitor specs to golden filters
@@ -196,6 +199,7 @@ class GeMScraper:
                         "competitorValue": spec_value,
                         "availableValues": gf_info["values"],
                         "specName": spec_name,
+                        "facetType": gf_info.get("type", ""),
                     })
                     break
 
@@ -223,11 +227,19 @@ class GeMScraper:
 
         for match in matches:
             competitor_val = match["competitorValue"].strip()
-
+            # On an "and" facet GeM only matches single components, so a
+            # composite value is tried one component at a time -- and only the
+            # components the competitor lacks can exclude them.
+            competitor_parts = {c.lower() for c in split_composite_value(competitor_val)}
+            candidate_values = []
             for alt_val in match["availableValues"]:
-                alt_val_clean = str(alt_val).strip()
-                if alt_val_clean.lower() == competitor_val.lower():
-                    continue
+                for qv in query_values_for(alt_val, match.get("facetType", "")):
+                    if qv.lower() in competitor_parts or qv.lower() == competitor_val.lower():
+                        continue
+                    if qv not in candidate_values:
+                        candidate_values.append(qv)
+
+            for alt_val_clean in candidate_values:
 
                 # Verify: scrape with this filter value to check if competitor is excluded
                 params = {match["filterKey"]: alt_val_clean}

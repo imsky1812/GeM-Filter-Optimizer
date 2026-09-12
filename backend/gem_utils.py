@@ -131,6 +131,29 @@ def normalize_filter_value(val) -> str:
     return val.replace(":", "").replace(" ", "").strip()
 
 
+ID_FACET_TYPE = "MultiselectAnd"
+
+
+def split_composite_value(val) -> list:
+    """
+    Components of a multi-select spec value: "USB Port,Wi-Fi" -> ["USB Port", "Wi-Fi"].
+
+    GeM has two facet flavours. "MultiselectOr" facets are queried with the
+    whole value ("Monochrome (Black)" -> 168 results). "MultiselectAnd"
+    facets store each component separately, and only components match:
+    measured live on the Connectivity facet, "USB Port,Wi-Fi" returns 0
+    while "Wi-Fi" returns 170 and "EthernetPort" returns 178.
+    """
+    return [part.strip() for part in str(val).split(",") if part.strip()]
+
+
+def query_values_for(val, facet_type: str) -> list:
+    """Value(s) to query GeM with for one filter value on one facet type."""
+    if facet_type == ID_FACET_TYPE:
+        return split_composite_value(val)
+    return [str(val).strip()]
+
+
 def parse_fragment_params(fragment: str) -> dict:
     """Parse query params out of a URL fragment like "/?q=chair&page=1"."""
     if not fragment:

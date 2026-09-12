@@ -19,7 +19,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote, urlencode
 
-from gem_utils import make_name_resolver, seller_key
+from gem_utils import (
+    ID_FACET_TYPE,
+    make_name_resolver,
+    query_values_for,
+    seller_key,
+    split_composite_value,
+)
 
 logger = logging.getLogger("chain-hunt")
 
@@ -291,10 +297,18 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 logger.info(f"[BFS Prune] Skipping filter {f.get('filterName')} ({key}) because only {populated_ratio:.0%} of enriched products have it populated.")
                 continue
 
+            # Composite values on an "and" facet are explored one component at
+            # a time -- the whole joined string never matches GeM's index.
+            values = []
+            for v in f.get("values", []):
+                for qv in query_values_for(v, f.get("type", "")):
+                    if qv not in values:
+                        values.append(qv)
+
             golden_list.append({
                 "filterKey": f["filterKey"],
                 "filterName": f["filterName"],
-                "values": _sort_spec_values(f.get("values", [])),
+                "values": _sort_spec_values(values),
             })
 
     # Pre-apply mandatory filters
@@ -315,8 +329,19 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     def normalize_active(active_dict):
         return {k: norm_value(v) for k, v in active_dict.items()}
 
+    # "MultiselectAnd" facets store each component of a composite value
+    # separately, and GeM only matches components, so a product's spec is held
+    # as the set of its components for those keys and as a single value for
+    # the rest.
+    and_keys = {fd["filterKey"] for fd in facet_defs if fd.get("type") == ID_FACET_TYPE}
+
+    def spec_components(key, value):
+        if key in and_keys:
+            return frozenset(norm_value(c) for c in split_composite_value(value))
+        return frozenset([norm_value(value)])
+
     for p in products:
-        p["norm_specs"] = {k: norm_value(v) for k, v in p["specs"].items()}
+        p["norm_specs"] = {k: spec_components(k, v) for k, v in p["specs"].items()}
 
     # Filter products matching active conditions (both sides normalized)
     def matches_filters(norm_specs, active_norm):
@@ -325,7 +350,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             if val is None:
                 # Spec data is missing - treat as matching (conservative)
                 continue
-            if val != v:
+            if v not in val:
                 return False
         return True
 
@@ -386,7 +411,7 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 continue
 
             # Restrict expansion to only values present in the matching products
-            allowed_values = {p["norm_specs"][key] for p in eval_res["products"] if p["norm_specs"].get(key)}
+            allowed_values = {v for p in eval_res["products"] for v in p["norm_specs"].get(key, ())}
 
             for val in gf.get("values", []):
                 if norm_value(val) not in allowed_values:

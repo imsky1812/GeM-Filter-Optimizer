@@ -377,6 +377,43 @@ def test_chain_hunt_treats_an_ignored_live_check_as_unconfirmed():
           len(result["unconfirmedPaths"]) > 0)
 
 
+def test_and_facet_values_are_queried_by_component():
+    print("\n[14] On an 'and' facet, a composite value is tried one component at a time")
+    from gem_utils import query_values_for
+    check("and-facet value splits into components",
+          query_values_for("USB Port,Wi-Fi", "MultiselectAnd") == ["USB Port", "Wi-Fi"])
+    check("or-facet value stays whole",
+          query_values_for("Monochrome (Black)", "MultiselectOr") == ["Monochrome (Black)"])
+
+    queried = []
+
+    class AndFacetScraper(GeMScraper):
+        def _fetch(self, url, retries=3):
+            if "c_conn=" in url:
+                queried.append(url.split("c_conn=")[1].split("&")[0])
+                return json.dumps({"number_of_results": 12,
+                                   "catalogs": [{"final_price": {"value": 9000}}]})
+            if "format=json" in url:
+                return json.dumps({"number_of_results": 90,
+                                   "catalogs": [{"final_price": {"value": 3000}}]})
+            return ('<html><body><h1>P</h1><div id="feature_groups">'
+                    '<table><tr><td>Connectivity</td><td>USB Port</td></tr></table></div></body></html>')
+
+    result = AndFacetScraper().surgical_strike(
+        product_url="https://mkp.gem.gov.in/p-x",
+        category_url="https://mkp.gem.gov.in/some-category/search",
+        target_price=5000,
+        golden_filters=[{"filterKey": "c_conn", "filterName": "Connectivity", "isGolden": True,
+                         "type": "MultiselectAnd", "values": ["USB Port", "USB Port,Wi-Fi"]}],
+    )
+    vals = [cf["counterValue"] for cf in result["counterFilters"]]
+    check(f"only the component the competitor lacks is suggested (got {vals})", vals == ["Wi-Fi"])
+    check(f"the joined value was never sent to GeM (sent: {queried})",
+          queried and all("," not in q and "%2C" not in q for q in queried))
+    check("the component check is a real, confirmed result",
+          result["counterFilters"][0]["verification"] == "confirmed")
+
+
 def test_l1_page_url_normalizes_filter_values():
     print("\n[13] The L1 surpasser sends normalized filter values too")
     scraper = l1_surpasser.GeMCategoryScraper(
@@ -399,6 +436,7 @@ if __name__ == "__main__":
     test_filter_ignored_by_gem_is_not_a_result()
     test_multi_word_values_have_spaces_stripped()
     test_chain_hunt_treats_an_ignored_live_check_as_unconfirmed()
+    test_and_facet_values_are_queried_by_component()
     test_l1_page_url_normalizes_filter_values()
     test_real_results_are_confirmed_and_can_win()
     test_l1_run_reports_fetch_failure()
