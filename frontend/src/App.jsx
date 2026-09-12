@@ -199,6 +199,10 @@ export default function App() {
     }
   };
 
+  // The scrape resolves short category aliases to the real category URL, so
+  // later steps must use what came back, not what was typed.
+  const categoryUrlForRequest = () => scrapedData?.url || withProtocol(gemUrl);
+
   const goldenFiltersForRequest = () =>
     scrapedData
       ? scrapedData.filters.filter((f) => f.isGolden && f.filterKey !== "mse_applicable")
@@ -219,7 +223,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           product_url: strikeUrl.trim(),
-          category_url: withProtocol(gemUrl),
+          category_url: categoryUrlForRequest(),
           target_price: priceNum,
           golden_filters: goldenFiltersForRequest(),
           location: selectedLocation,
@@ -253,7 +257,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          category_url: withProtocol(gemUrl),
+          category_url: categoryUrlForRequest(),
           target_price: priceNum,
           golden_filters: goldenFiltersForRequest(),
           location: selectedLocation,

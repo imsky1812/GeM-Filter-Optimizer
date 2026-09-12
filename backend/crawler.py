@@ -581,6 +581,16 @@ class GeMCrawler:
         # ── Attempt 1: JSON API (fast path) ──────────────────────────────────
         json_result = self._try_json_crawl(base_url, fragment_params, location, max_pages)
 
+        # ── Attempt 1b: the URL may be one of GeM's short category aliases ───
+        if not (json_result and json_result.get("products")):
+            canonical = self._resolve_canonical_category(base_url)
+            if canonical:
+                logger.info(f"[Crawler] {base_url} looks like an alias; following canonical {canonical}")
+                alt = self._try_json_crawl(canonical, fragment_params, location, max_pages)
+                if alt and alt.get("products"):
+                    json_result = alt
+                    base_url = canonical
+
         if json_result and json_result.get("products"):
             products = json_result["products"]
             filters = json_result["filters"]
@@ -609,6 +619,35 @@ class GeMCrawler:
         # ── Attempt 2: Playwright full render (fallback) ─────────────────────
         logger.info("[Crawler] JSON API failed. Falling back to Playwright rendering...")
         return self._playwright_crawl(base_url, fragment_params, location, max_pages)
+
+    _CANONICAL_RE = re.compile(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)', re.I)
+
+    def _resolve_canonical_category(self, url: str) -> Optional[str]:
+        """
+        Follow a short GeM category link to the real category URL.
+
+        The links on GeM's own homepage (e.g. /computer-printer-0901print/search)
+        are aliases: they serve the single-page app instead of JSON, so a scrape
+        of one finds nothing. The rendered page names the real category in
+        <link rel="canonical">, which does serve JSON.
+        """
+        try:
+            html = self._bm.fetch(url, timeout=30000, retries=2)
+        except Exception as e:
+            logger.warning(f"[Crawler] Could not load {url} to look for a canonical link: {e}")
+            return None
+
+        m = self._CANONICAL_RE.search(html)
+        if not m:
+            return None
+
+        canonical = m.group(1).strip().split("#")[0].split("?")[0].rstrip("/")
+        host = (urlparse(canonical).hostname or "").lower()
+        if not (host.endswith("gem.gov.in") or host.endswith("gemorion.org")):
+            return None
+        if not canonical.endswith("/search"):
+            canonical += "/search"
+        return None if canonical.rstrip("/") == url.rstrip("/") else canonical
 
     # ── Product Detail Crawl ─────────────────────────────────────────────────
 

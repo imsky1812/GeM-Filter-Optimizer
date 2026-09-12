@@ -414,6 +414,52 @@ def test_and_facet_values_are_queried_by_component():
           result["counterFilters"][0]["verification"] == "confirmed")
 
 
+ALIAS_URL = "https://mkp.gem.gov.in/computer-printer-0901print/search"
+CANONICAL = "https://mkp.gem.gov.in/information-technology-computer-printer-v2-"
+
+
+def test_resolve_canonical_category():
+    print("\n[15] A short category alias resolves to the canonical category URL")
+    gc = crawler_mod.GeMCrawler.__new__(crawler_mod.GeMCrawler)
+    gc._bm = MagicMock()
+
+    gc._bm.fetch = lambda url, *a, **k: f'<html><head><link rel="canonical" href="{CANONICAL}"/></head></html>'
+    check("canonical is followed and /search appended",
+          gc._resolve_canonical_category(ALIAS_URL) == CANONICAL + "/search")
+
+    gc._bm.fetch = lambda url, *a, **k: '<html><head><link rel="canonical" href="https://evil.com/x"/></head></html>'
+    check("a canonical pointing off-site is ignored", gc._resolve_canonical_category(ALIAS_URL) is None)
+
+    gc._bm.fetch = lambda url, *a, **k: f'<html><head><link rel="canonical" href="{ALIAS_URL}"/></head></html>'
+    check("a canonical pointing back at the same URL is ignored",
+          gc._resolve_canonical_category(ALIAS_URL) is None)
+
+    gc._bm.fetch = lambda url, *a, **k: "<html><head></head><body>no canonical</body></html>"
+    check("no canonical link yields None", gc._resolve_canonical_category(ALIAS_URL) is None)
+
+
+def test_crawl_category_follows_an_alias():
+    print("\n[16] Scraping an alias URL transparently crawls the canonical category")
+    gc = crawler_mod.GeMCrawler.__new__(crawler_mod.GeMCrawler)
+    gc._bm = MagicMock()
+    page1 = json.dumps({"number_of_results": 2, "facets": {}, "catalogs": [
+        {"id": "1", "final_price": {"value": 100}}, {"id": "2", "final_price": {"value": 200}}]})
+
+    def fake_fetch(url, *a, **k):
+        if "format=json" in url:
+            # only the canonical category serves JSON
+            return page1 if "computer-printer-v2-" in url else "<html>single page app</html>"
+        return f'<html><head><link rel="canonical" href="{CANONICAL}"/></head></html>'
+
+    gc._bm.fetch = fake_fetch
+    gc._bm.fetch_many = lambda urls, **k: []
+    result = gc.crawl_category(ALIAS_URL)
+    check(f"products were found via the canonical URL (got {result['productCount']})",
+          result["productCount"] == 2)
+    check(f"the resolved URL is returned so later steps use it (got {result['url']!r})",
+          result["url"] == CANONICAL + "/search")
+
+
 def test_l1_page_url_normalizes_filter_values():
     print("\n[13] The L1 surpasser sends normalized filter values too")
     scraper = l1_surpasser.GeMCategoryScraper(
@@ -437,6 +483,8 @@ if __name__ == "__main__":
     test_multi_word_values_have_spaces_stripped()
     test_chain_hunt_treats_an_ignored_live_check_as_unconfirmed()
     test_and_facet_values_are_queried_by_component()
+    test_resolve_canonical_category()
+    test_crawl_category_follows_an_alias()
     test_l1_page_url_normalizes_filter_values()
     test_real_results_are_confirmed_and_can_win()
     test_l1_run_reports_fetch_failure()

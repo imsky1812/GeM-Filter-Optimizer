@@ -223,8 +223,10 @@ def scrape(req: ScrapeRequest):
             )
         else:
             detail = (
-                "No products found on this page. Make sure the URL is a GeM "
-                "category listing page (e.g. from the category search results)."
+                "No products found for this URL. Short category links from GeM's "
+                "homepage are aliases that we follow automatically when we can; "
+                "this one didn't resolve. Open the category on GeM and copy the "
+                "full URL from the address bar (it ends in /search)."
             )
         raise HTTPException(status_code=422, detail=detail)
 
