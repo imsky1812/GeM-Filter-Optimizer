@@ -227,9 +227,9 @@ class GeMScraper:
 
         for match in matches:
             competitor_val = match["competitorValue"].strip()
-            # On an "and" facet GeM only matches single components, so a
-            # composite value is tried one component at a time -- and only the
-            # components the competitor lacks can exclude them.
+            # A multi-select value is tried one component at a time (GeM only
+            # matches components), and only the components the competitor
+            # lacks can exclude them.
             competitor_parts = {c.lower() for c in split_composite_value(competitor_val)}
             candidate_values = []
             for alt_val in match["availableValues"]:

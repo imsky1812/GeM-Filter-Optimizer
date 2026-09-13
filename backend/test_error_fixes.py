@@ -353,6 +353,12 @@ def test_multi_word_values_have_spaces_stripped():
     check("single words are unchanged", norm("Leatherette") == "Leatherette")
     check("'HDD @7200RPM' -> 'HDD7200RPM' (the index drops @)", norm("HDD @7200RPM") == "HDD7200RPM")
     check("hyphens survive", norm("Wi-Fi") == "Wi-Fi")
+    check("brackets survive (removing them breaks the match)",
+          norm("Monochrome (Black)") == "Monochrome(Black)")
+    check("apostrophes are dropped", norm("As per buyer's requirement") == "Asperbuyersrequirement")
+    check("a curly apostrophe is dropped too", norm("buyer’s") == "buyers")
+    check("sentence commas are dropped",
+          norm("Size, Design, Type and Location of Logo(s)") == "SizeDesignTypeandLocationofLogo(s)")
     check("a slashed value still takes the first option", norm("Brown / Tan") == "Brown")
     check("non-strings survive", norm(12) == "12")
 
@@ -386,6 +392,13 @@ def test_and_facet_values_are_queried_by_component():
           query_values_for("USB Port,Wi-Fi", "MultiselectAnd") == ["USB Port", "Wi-Fi"])
     check("or-facet value stays whole",
           query_values_for("Monochrome (Black)", "MultiselectOr") == ["Monochrome (Black)"])
+    # The facet type is not a reliable guide: "Suitable for Age Group" is
+    # declared MultiselectOr but holds several values.
+    check("a comma with no space after it means several values, whatever the type",
+          query_values_for("3 TO 4,4 TO 6,9 TO 12", "MultiselectOr") == ["3 TO 4", "4 TO 6", "9 TO 12"])
+    check("a comma followed by a space is punctuation, so the value stays whole",
+          query_values_for("Size, Design, Type and Location", "MultiselectOr")
+          == ["Size, Design, Type and Location"])
 
     queried = []
 

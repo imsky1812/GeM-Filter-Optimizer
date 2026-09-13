@@ -134,13 +134,35 @@ def normalize_filter_value(val) -> str:
 
 
 # Characters GeM's search index drops from a spec value. Brackets and hyphens
-# are NOT dropped -- "Monochrome(Black)" and "Wi-Fi" both match as-is -- but a
-# space, a colon or an "@" must go. Measured live on the desktop-computer
-# category: C5928E=HDD@7200RPM returns 0 (encoded or literal), while
-# C5928E=HDD7200RPM returns 882.
-_INDEX_DROPPED_CHARS = (" ", ":", "@")
+# are NOT dropped -- "Monochrome(Black)" and "Wi-Fi" both match as-is, and
+# removing the brackets breaks the match -- but these must go. Measured live:
+#   space   C6065E=Mesh fabrics -> 0,        Meshfabrics -> 11,112
+#   @       C5928E=HDD@7200RPM  -> 0,        HDD7200RPM  -> 882
+#   '       C5534E=...buyer's...-> 0,        ...buyers...-> 982
+#   ,       C2405E="Size, Design, Type and Location of Logo(s) as per
+#           buyer's requirement" -> 0 with the commas, 889 without
+_INDEX_DROPPED_CHARS = (" ", ":", "@", "'", "’", ",")
 
 ID_FACET_TYPE = "MultiselectAnd"
+
+# A comma with no space after it separates the values of a multi-select spec;
+# a comma followed by a space is punctuation inside one sentence.
+_MULTI_VALUE_COMMA = re.compile(r",\S")
+
+
+def is_multi_value(val, facet_type: str = "") -> bool:
+    """
+    True when a spec value holds several values rather than one phrase.
+
+    GeM's JSON doesn't say which is which -- the facet type is not a reliable
+    guide, since "Suitable for Age Group" is declared MultiselectOr yet holds
+    "3 TO 4,4 TO 6,9 TO 12", whose components index separately (3TO4 -> 4,444)
+    while the joined string returns 0. The writing distinguishes them: a
+    separator comma has no space after it, a sentence comma does.
+    """
+    if facet_type == ID_FACET_TYPE:
+        return "," in str(val)
+    return bool(_MULTI_VALUE_COMMA.search(str(val)))
 
 
 def split_composite_value(val) -> list:
@@ -156,9 +178,13 @@ def split_composite_value(val) -> list:
     return [part.strip() for part in str(val).split(",") if part.strip()]
 
 
-def query_values_for(val, facet_type: str) -> list:
-    """Value(s) to query GeM with for one filter value on one facet type."""
-    if facet_type == ID_FACET_TYPE:
+def query_values_for(val, facet_type: str = "") -> list:
+    """
+    Value(s) to query GeM with for one filter value: the components of a
+    multi-select value, or the value itself (whose commas, if any, are
+    punctuation that normalize_filter_value drops).
+    """
+    if is_multi_value(val, facet_type):
         return split_composite_value(val)
     return [str(val).strip()]
 

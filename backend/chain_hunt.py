@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote, urlencode
 
 from gem_utils import (
-    ID_FACET_TYPE,
+    is_multi_value,
     make_name_resolver,
     query_values_for,
     seller_key,
@@ -333,10 +333,10 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     # separately, and GeM only matches components, so a product's spec is held
     # as the set of its components for those keys and as a single value for
     # the rest.
-    and_keys = {fd["filterKey"] for fd in facet_defs if fd.get("type") == ID_FACET_TYPE}
+    facet_types = {fd["filterKey"]: fd.get("type", "") for fd in facet_defs}
 
     def spec_components(key, value):
-        if key in and_keys:
+        if is_multi_value(value, facet_types.get(key, "")):
             return frozenset(norm_value(c) for c in split_composite_value(value))
         return frozenset([norm_value(value)])
 
