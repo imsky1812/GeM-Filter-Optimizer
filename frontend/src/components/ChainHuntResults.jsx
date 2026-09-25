@@ -141,6 +141,28 @@ export default function ChainHuntResults({
 
   if (!chainResults) return null;
 
+  // "We couldn't read the category" is not "no path exists". Reporting the
+  // first as the second tells a seller their price is unwinnable when nothing
+  // was ever searched.
+  if (chainResults.status === "UNREACHABLE") {
+    return (
+      <div className="card fade-in fade-in-d2">
+        <div className="err-box">
+          GeM didn't return a readable response for this category, so nothing was
+          searched — this is not a verdict on your price.
+          {chainResults.errorReason && (
+            <div className="res-foot-meta" style={{ marginTop: 8 }}>
+              {chainResults.errorReason}
+            </div>
+          )}
+          <div className="flex-row-gap-16">
+            <button className="btn btn-primary flex-1" onClick={onChainHunt}>Try again</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const paths = chainResults.winningPaths || [];
   const unconfirmed = chainResults.unconfirmedPaths || [];
   const hasPaths = paths.length > 0;

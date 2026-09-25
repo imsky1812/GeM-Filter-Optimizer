@@ -68,7 +68,22 @@ def _stuck_result(api_calls: int, golden_filter_count: int, t_start: float, targ
         "bestAchievablePrice": None,
         "marketMinPrice": None,
         "targetPrice": target_price,
+        "sampleSize": 0,
     }
+
+
+def _unreachable_result(api_calls: int, golden_filter_count: int, t_start: float,
+                        target_price: int, reason: str) -> dict:
+    """
+    We never got a readable answer out of GeM. This is NOT the same as
+    searching the category and finding no winning path: callers must not
+    report it as "no combination makes you L1".
+    """
+    out = _stuck_result(api_calls, golden_filter_count, t_start, target_price)
+    out["status"] = "UNREACHABLE"
+    out["error"] = True
+    out["errorReason"] = reason
+    return out
 
 
 # ── Main Algorithm: In-Memory Complete Dataset Search (IMCDS) ───────────────
@@ -113,16 +128,37 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
     page1_url = f"{base_url}?page=1&format=json{extra_qs}"
     logger.info(f"[IMCDS] Fetching Page 1: {page1_url}")
 
-    try:
-        text = self._fetch(page1_url).strip()
+    def _fetch_page1(url_for_page1):
+        """Page 1 carries the totals and facets the whole search is built on."""
+        body = self._fetch(url_for_page1).strip()
         api_calls[0] += 1
-        if not text.startswith("{"):
-            logger.error(f"[IMCDS] Page 1 response is not JSON: {text[:200]}")
-            return _stuck_result(api_calls[0], len(golden_filters), t_start, target_price)
-        data1 = json.loads(text)
+        if not body.startswith("{"):
+            raise ValueError(f"response was not JSON: {body[:120]}")
+        return json.loads(body)
+
+    try:
+        data1 = _fetch_page1(page1_url)
     except Exception as e:
-        logger.error(f"[IMCDS] Failed to fetch Page 1: {e}")
-        return _stuck_result(api_calls[0], len(golden_filters), t_start, target_price)
+        # A short GeM category link (the kind its own homepage uses) serves the
+        # single-page app instead of JSON. The scan already follows these to the
+        # real category; the hunt has to do the same or it reports "no path" for
+        # a category it never actually read.
+        logger.info(f"[IMCDS] Page 1 unreadable ({e}); checking for a category alias")
+        from crawler import GeMCrawler
+        canonical = GeMCrawler()._resolve_canonical_category(base_url)
+        if not canonical:
+            logger.error(f"[IMCDS] Could not read Page 1 for {base_url}: {e}")
+            return _unreachable_result(api_calls[0], len(golden_filters), t_start,
+                                       target_price, str(e))
+        logger.info(f"[IMCDS] Following canonical category {canonical}")
+        base_url = canonical
+        page1_url = f"{base_url}?page=1&format=json{extra_qs}"
+        try:
+            data1 = _fetch_page1(page1_url)
+        except Exception as e2:
+            logger.error(f"[IMCDS] Could not read Page 1 for {canonical}: {e2}")
+            return _unreachable_result(api_calls[0], len(golden_filters), t_start,
+                                       target_price, str(e2))
 
     total_results = data1.get("number_of_results", 0)
     facets = data1.get("facets", {})
