@@ -37,9 +37,13 @@ import threading
 from typing import Optional
 from urllib.parse import urlencode, urlparse, parse_qs
 
+from bs4 import BeautifulSoup
+
 from gem_utils import (
+    HTML_PARSER,
     build_product_url,
     extract_inline_specs,
+    extract_specs_from_soup,
     make_name_resolver,
     normalize_filter_value,
     parse_fragment_params,
@@ -1383,6 +1387,16 @@ class GeMCrawler:
         or didn't clearly price this listing -- callers keep the search
         price for those and must not count them as checked.
         """
+        return {u: info["price"] for u, info in self.live_pages(urls).items()}
+
+    def live_pages(self, urls: list) -> dict:
+        """
+        Read each listing's own product page: {url: {"price", "specs"}}.
+
+        Specs come along for free -- the page is already open -- and tell a
+        search which filter values a blocking listing has. "price" is None
+        when the page couldn't be read or didn't clearly price this listing.
+        """
         urls = [u for u in dict.fromkeys(urls) if u]
         if not urls:
             return {}
@@ -1392,7 +1406,7 @@ class GeMCrawler:
         # homepage. Such a page has no product variant id, so no price is
         # read from it (correctly), but it isn't an answer either -- retry
         # those listings in smaller, slower rounds.
-        prices = {}
+        out = {}
         pending = urls
         for round_no, concurrency in enumerate((4, 2, 1)):
             if round_no:
@@ -1400,8 +1414,15 @@ class GeMCrawler:
             pages = self._bm.fetch_many(pending, timeout=20000, retries=2, concurrency=concurrency)
             throttled = []
             for u, html in zip(pending, pages):
-                prices[u] = live_price_from_page(u, html)
-                if prices[u] is None and html and "default_variant_id" not in html:
+                price = live_price_from_page(u, html)
+                specs = {}
+                if html and "default_variant_id" in html:
+                    try:
+                        specs = extract_specs_from_soup(BeautifulSoup(html, HTML_PARSER))
+                    except Exception:
+                        specs = {}
+                out[u] = {"price": price, "specs": specs}
+                if price is None and html and "default_variant_id" not in html:
                     throttled.append(u)
             if not throttled:
                 break
@@ -1409,10 +1430,10 @@ class GeMCrawler:
                         f"(throttled); retrying at concurrency {(4, 2, 1)[min(round_no + 1, 2)]}")
             pending = throttled
 
-        read = sum(v is not None for v in prices.values())
+        read = sum(v["price"] is not None for v in out.values())
         if read < len(urls):
             logger.info(f"[Crawler] Page prices: {read}/{len(urls)} read")
-        return prices
+        return out
 
     def _parse_facets(self, facets: dict) -> list:
         """Parse facets JSON into a list of filter definitions."""

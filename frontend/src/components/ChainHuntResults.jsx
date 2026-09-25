@@ -361,12 +361,19 @@ export default function ChainHuntResults({
       )}
 
       {/* ── What the search couldn't see ─────────────────────── */}
-      {(gaps.length > 0 || unrecognized.length > 0) && (
+      {(gaps.length > 0 || unrecognized.length > 0 || chainResults.budgetExhausted) && (
         <section className="res-section">
           <h3 className="res-section-title">
             Limits of this search
             <span className="res-section-note">Niches it could not measure</span>
           </h3>
+          {chainResults.budgetExhausted && (
+            <p className="res-note">
+              The search stopped at its budget of {chainResults.nicheQueries} niches with{" "}
+              {chainResults.unexploredCombinations} combinations still unexplored, so more winning
+              niches may exist than the {chainResults.totalPaths} shown.
+            </p>
+          )}
           {gaps.length > 0 && (
             <p className="res-note">
               Some filters have values the category scan never saw, so niches built on them weren't

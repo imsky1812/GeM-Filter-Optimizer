@@ -52,6 +52,7 @@ class FakeGeM:
         return {
             "min_price": hits[0]["price"] if hits else None,
             "total": len(hits),
+            "product_count": len(shown),
             "seller_count": len({l["seller"] for l in shown}),
             "products": [{"url": l["url"], "price": l["price"], "name": l["url"],
                           "brand": l["seller"], "seller": l["seller"], "seller_id": l["seller"]}
@@ -60,14 +61,18 @@ class FakeGeM:
             "ignored": False,
         }
 
-    def live_prices(self, urls):
-        by_url = {l["url"]: l["page"] for l in self.CATALOG}
-        return {u: by_url.get(u) for u in urls}
+    pages_read = []
+
+    def live_pages(self, urls):
+        FakeGeM.pages_read.extend(urls)
+        by_url = {l["url"]: l for l in self.CATALOG}
+        return {u: {"price": by_url[u]["page"], "specs": dict(by_url[u]["specs"])} for u in urls}
 
 
 def run(catalog, target, golden):
     FakeGeM.CATALOG = catalog
     FakeGeM.queries = []
+    FakeGeM.pages_read = []
     return niche_search.find_l1_niches("https://mkp.gem.gov.in/x/search", target, golden)
 
 
@@ -153,6 +158,31 @@ check("status WIN", res["status"] == "WIN", res["status"])
 check("the win is the whole category, no filters",
       res["winningPaths"] and res["winningPaths"][0]["activeFilters"] == {},
       [p["activeFilters"] for p in res["winningPaths"]])
+
+# ── 7. A demoted niche is refined, not abandoned ─────────────────────────────
+print("\nA niche the page check demotes is refined into a real win")
+cat = [
+    listing(1, 100, colour="blue", size="M"),
+    # Search says 500, the page sells at 150: "red" looks like a win and isn't.
+    listing(2, 500, page_price=150, colour="red", size="L"),
+    listing(3, 600, colour="red", size="M"),
+    listing(4, 650, colour="red", size="M"),
+]
+res = run(cat, 200, [golden("colour", "red", "blue"), golden("size", "L", "M")])
+wins = {tuple(sorted(p["activeFilters"].items())) for p in res["winningPaths"] if p["status"] == "WIN"}
+check("red alone is not reported as a win", (("colour", "red"),) not in wins, wins)
+check("red + M, which drops the stale listing, is found",
+      (("colour", "red"), ("size", "M")) in wins, wins)
+win = next((p for p in res["winningPaths"] if p["activeFilters"] == {"colour": "red", "size": "M"}), None)
+check("its floor is the real one", win and win["nicheMinPrice"] == 600, win and win["nicheMinPrice"])
+
+# ── 8. Every reported win was page-read ──────────────────────────────────────
+print("\nNo win is reported without its listings being page-read")
+for p in res["winningPaths"]:
+    if p["status"] == "WIN":
+        pc = p["priceCheck"] or {}
+        check(f"{p['activeFilters']} fully page-checked",
+              pc.get("checked") == pc.get("fetched") and pc.get("checked", 0) > 0, pc)
 
 print(f"\n{'=' * 60}\n{passed} passed, {failed} failed\n{'=' * 60}")
 sys.exit(1 if failed else 0)
