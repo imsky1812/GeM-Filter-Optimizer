@@ -72,6 +72,41 @@ def _stuck_result(api_calls: int, golden_filter_count: int, t_start: float, targ
     }
 
 
+# How many of each path's cheapest listings get priced from their own page.
+LIVE_PRICE_DEPTH = 24
+
+
+def _reprice_from_pages(live_res: dict, page_prices: dict) -> None:
+    """
+    Swap search prices for product-page prices where we have them, and
+    recompute the path's floor from the result.
+
+    Listings we couldn't page-price keep their search price. The floor is
+    the lowest price across both, so a single stale listing that is really
+    under the seller's price is enough to take the win away.
+    """
+    products = live_res.get("products") or []
+    checked = corrected = 0
+    for p in products:
+        p.setdefault("searchPrice", p["price"])
+        live = page_prices.get(p.get("url"))
+        if live is None:
+            continue
+        checked += 1
+        p["pricePageChecked"] = True
+        p["price"] = live
+        if live != p["searchPrice"]:
+            corrected += 1
+    products.sort(key=lambda p: p["price"])
+    if products:
+        floor = products[0]["price"]
+        if live_res.get("min_price") is None or floor < live_res["min_price"]:
+            live_res["min_price"] = floor
+    live_res["priceCheck"] = {"checked": checked, "corrected": corrected,
+                              "fetched": len(products),
+                              "listings": live_res.get("total", 0)}
+
+
 def _unreachable_result(api_calls: int, golden_filter_count: int, t_start: float,
                         target_price: int, reason: str) -> dict:
     """
@@ -562,6 +597,8 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             "id": p.get("catalogue_id") or p.get("id", ""),
             "name": p.get("name", ""),
             "price": p.get("price", 0),
+            "searchPrice": p.get("searchPrice", p.get("price", 0)),
+            "pricePageChecked": bool(p.get("pricePageChecked")),
             "seller": p.get("seller_name") or p.get("seller", ""),
             "seller_id": p.get("seller_id", ""),
             "brand": p.get("brand", ""),
@@ -658,9 +695,48 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             "nicheMinPrice": live_res["min_price"],
             "totalProducts": live_res["total"],
             "sellerCount": live_res["seller_count"],
+            "priceCheck": live_res.get("priceCheck"),
             "chainLength": len(active_dict) + len(start_filters),
             "competitorInsights": extract_competitor_insights(live_res["products"], target_price),
         }
+
+    # ── STEP 4b: PRICE THE DECIDING LISTINGS FROM THEIR OWN PAGES ──
+    # GeM's search index lags behind price cuts. A listing cut from 6,990 to
+    # 2,500 can sit at 6,990 in search while its page already charges 2,500,
+    # and this search is drawn to exactly those listings: a stale high price
+    # looks like a rival the seller can sit under. Every verdict below is
+    # therefore made on product-page prices for the cheapest listings of each
+    # path, not on the index.
+    if verified_paths:
+        from crawler import GeMCrawler
+        wanted = []
+        for _, _, _, live_res in verified_paths:
+            cheapest = sorted(live_res.get("products") or [], key=lambda p: p["price"])
+            wanted.extend(p["url"] for p in cheapest[:LIVE_PRICE_DEPTH] if p.get("url"))
+        page_prices = GeMCrawler().live_prices(wanted)
+        api_calls[0] += len(page_prices)
+        stale = sum(1 for _, _, _, lr in verified_paths for p in lr.get("products") or []
+                    if page_prices.get(p.get("url")) not in (None, p["price"]))
+        logger.info(f"[IMCDS] Page-priced {len(page_prices)} listings; "
+                    f"{sum(v is not None for v in page_prices.values())} readable, "
+                    f"{stale} path entries were stale in search")
+        for _, _, _, live_res in verified_paths:
+            _reprice_from_pages(live_res, page_prices)
+
+        # A WIN is the claim a seller acts on, so it has to hold for every
+        # listing we fetched, not just the cheapest few. Page-check the rest
+        # of any path still standing as a win.
+        still_winning = [lr for _, _, _, lr in verified_paths
+                         if lr.get("min_price") is not None and lr["min_price"] > target_price]
+        rest = [p["url"] for lr in still_winning for p in lr.get("products") or []
+                if p.get("url") and p["url"] not in page_prices]
+        if rest:
+            more = GeMCrawler().live_prices(rest)
+            api_calls[0] += len(more)
+            page_prices.update(more)
+            for lr in still_winning:
+                _reprice_from_pages(lr, page_prices)
+            logger.info(f"[IMCDS] Page-priced {len(more)} more listings on {len(still_winning)} winning paths")
 
     # ── STEP 5: RECONSTRUCT AND SORT VERIFIED RESULTS ──
     winning_candidates = []

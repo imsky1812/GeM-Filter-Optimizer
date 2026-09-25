@@ -84,6 +84,11 @@ function CompetitorCard({ role, competitor, onOpen }) {
         <span className="res-rival-brand">{brand || "Unknown seller"}</span>
         <span className="res-rival-price">{money(competitor.price)}</span>
       </span>
+      {competitor.pricePageChecked && competitor.searchPrice !== competitor.price && (
+        <span className="res-rival-stale">
+          GeM search still lists <s>{money(competitor.searchPrice)}</s>
+        </span>
+      )}
     </button>
   );
 }
@@ -214,6 +219,17 @@ export default function ChainHuntResults({
         </dl>
       )}
 
+      {path?.priceCheck && (
+        <p className="res-provenance">
+          {path.priceCheck.checked >= path.priceCheck.listings
+            ? `Every listing in this niche was priced from its own product page`
+            : `Priced from the product pages of ${path.priceCheck.checked} of the ${path.priceCheck.listings.toLocaleString()} listings in this niche, cheapest first`}
+          {path.priceCheck.corrected > 0 && (
+            <> · <strong>{path.priceCheck.corrected}</strong> had a stale price in GeM's search and were corrected</>
+          )}
+        </p>
+      )}
+
       {/* ── Which path ─────────────────────────────────────────── */}
       {hasPaths && (
         <section className="res-paths">
@@ -295,7 +311,7 @@ export default function ChainHuntResults({
           <h3 className="res-section-title">
             Who you'd sit above
             <span className="res-section-note">
-              Priced as GeM's search lists them; a listing's own page can quote a different offer price
+              Prices read from each listing's own page, the price a buyer pays
             </span>
           </h3>
           <div className="res-rivals">

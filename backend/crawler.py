@@ -45,6 +45,7 @@ from gem_utils import (
     parse_fragment_params,
     parse_price,
     pull_facet_values,
+    live_price_from_page,
     seller_key,
     to_key,
 )
@@ -308,6 +309,18 @@ class BrowserManager:
                     window.chrome = {runtime: {}};
                 """)
 
+                # Everything we read -- JSON, and the server-rendered HTML that
+                # carries specs and prices -- arrives in the document itself.
+                # Images, media and fonts are pure memory cost: a burst of
+                # product-page checks that loaded them exhausted Chromium on a
+                # low-memory machine (net::ERR_INSUFFICIENT_RESOURCES).
+                async def _skip_heavy(route):
+                    if route.request.resource_type in ("image", "media", "font"):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                await self._context.route("**/*", _skip_heavy)
+
                 # Warm up: navigate to GeM homepage to establish cookies.
                 # One-time cost at startup, not per-request, so a fixed
                 # settle wait here is fine (unlike the old per-fetch sleep).
@@ -345,19 +358,30 @@ class BrowserManager:
                 if not page.is_closed():
                     return page
         try:
-            return await self._context.new_page()
-        except Exception:
+            return await asyncio.wait_for(self._context.new_page(), timeout=20)
+        except BaseException:
+            # BaseException, not Exception: a cancelled fetch raises
+            # CancelledError here, and must not walk off holding a slot.
             self._page_slots.release()
             raise
 
-    async def release_page_async(self, page):
-        """Return a page to the pool for reuse, or close it if the pool is full/dead."""
+    async def release_page_async(self, page, discard: bool = False):
+        """
+        Return a page to the pool for reuse, or close it if the pool is full,
+        the page is dead, or `discard` says the page just failed or hung.
+        """
         try:
             async with self._pool_lock:
-                if len(self._page_pool) < self._POOL_SIZE and not page.is_closed():
+                keep = (not discard and len(self._page_pool) < self._POOL_SIZE
+                        and not page.is_closed())
+                if keep:
                     self._page_pool.append(page)
-                else:
-                    await page.close()
+            # Close OUTSIDE the lock, and never wait on it for long. A starved
+            # renderer can hang page.close(); awaited under the lock, that one
+            # hang blocked every other acquire and release, and the whole hunt
+            # stalled with no error.
+            if not keep:
+                await asyncio.wait_for(page.close(), timeout=5)
         except Exception:
             pass
         finally:
@@ -380,50 +404,72 @@ class BrowserManager:
             except Exception as e:
                 logger.warning(f"[BrowserManager] Cookie refresh failed: {e}")
             finally:
-                await page.close()
+                try:
+                    await asyncio.wait_for(page.close(), timeout=5)
+                except Exception:
+                    pass
 
     # ── Low-level fetch primitive (used by scraper.py / l1_surpasser.py) ──
 
     async def _fetch_one_async(self, url: str, timeout: int, retries: int) -> str:
         """
         Fetch a URL, returning its text content. Retries transient failures
-        with backoff, refreshes cookies on a redirect-to-login, and — only
-        for non-JSON (real HTML) responses — waits briefly for client-side
+        with backoff, refreshes cookies on a redirect-to-login, and -- only
+        for non-JSON (real HTML) responses -- waits briefly for client-side
         content to render. No blind sleep for JSON: it needs no JS
         execution, so domcontentloaded is already enough.
+
+        Each attempt runs under one deadline. Playwright bounds page.goto,
+        but not response.text() or page.content(), and a starved renderer
+        can sit in either forever while holding one of the pool's few page
+        slots; once they were all held, every fetch in the process waited
+        and a hunt stalled with no error at all. A page that fails or times
+        out is closed rather than pooled, so the next fetch never inherits
+        a wedged tab.
         """
+        attempt_budget = timeout / 1000 + 15
+
+        async def _attempt(page):
+            response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+            json_text = _extract_json_text(await _page_body(page, response))
+            if json_text is not None:
+                return "ok", json_text
+            # Detect GeM redirecting us to the homepage/login (session invalid)
+            if _looks_like_login_redirect(page.url):
+                return "login", page.url
+            # A real HTML page: give client-rendered content a moment to appear.
+            try:
+                await page.wait_for_selector(
+                    "h1, #feature_groups, .specifications, #search-result-items",
+                    timeout=3000,
+                )
+            except Exception:
+                pass
+            return "ok", await page.content()
+
         last_err = None
         for attempt in range(retries):
             page = await self.acquire_page_async()
+            failed = False
             try:
-                response = await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
-                json_text = _extract_json_text(await _page_body(page, response))
-                if json_text is not None:
-                    return json_text
-
-                # Detect GeM redirecting us to the homepage/login (session invalid)
-                if _looks_like_login_redirect(page.url):
-                    if attempt < retries - 1:
-                        logger.warning(f"[Crawler] Redirect detected to {page.url}, refreshing session cookies...")
-                        await self.refresh_cookies_async()
-                        continue
-                    # Last attempt: don't return the login page as if it were
-                    # valid content -- raise so the caller sees a real failure.
-                    raise RuntimeError(f"GeM redirected to login/homepage on final attempt: {page.url}")
-
-                # A real HTML page: give client-rendered content a moment to appear.
-                try:
-                    await page.wait_for_selector(
-                        "h1, #feature_groups, .specifications, #search-result-items",
-                        timeout=3000,
-                    )
-                except Exception:
-                    pass
-
-                return await page.content()
+                outcome, value = await asyncio.wait_for(_attempt(page), attempt_budget)
+                if outcome == "ok":
+                    return value
+                # outcome == "login"
+                if attempt < retries - 1:
+                    logger.warning(f"[Crawler] Redirect detected to {value}, refreshing session cookies...")
+                    try:
+                        await asyncio.wait_for(self.refresh_cookies_async(), 45)
+                    except Exception as e:
+                        logger.warning(f"[Crawler] Cookie refresh didn't finish: {e}")
+                    continue
+                # Last attempt: don't return the login page as if it were
+                # valid content -- raise so the caller sees a real failure.
+                raise RuntimeError(f"GeM redirected to login/homepage on final attempt: {value}")
             except Exception as e:
-                last_err = e
-                logger.warning(f"[Crawler] Fetch attempt {attempt + 1}/{retries} failed for {url}: {e}")
+                failed = True
+                last_err = e if str(e) else TimeoutError(f"no response within {attempt_budget:.0f}s")
+                logger.warning(f"[Crawler] Fetch attempt {attempt + 1}/{retries} failed for {url}: {last_err}")
                 if _is_driver_crash_error(e):
                     logger.error(
                         "[BrowserManager] Driver crash detected -- marking browser dead "
@@ -433,7 +479,7 @@ class BrowserManager:
                 if attempt < retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
             finally:
-                await self.release_page_async(page)
+                await self.release_page_async(page, discard=failed)
         raise RuntimeError(f"Fetch failed after {retries} attempts: {last_err}")
 
     async def fetch_async(self, url: str, timeout: int = 30000, retries: int = 3) -> str:
@@ -444,7 +490,8 @@ class BrowserManager:
         """Synchronous, thread-safe single-URL fetch. Blocks the caller."""
         return self.run(self._fetch_one_async(url, timeout, retries))
 
-    def fetch_many(self, urls: list, timeout: int = 15000, retries: int = 2) -> list:
+    def fetch_many(self, urls: list, timeout: int = 15000, retries: int = 2,
+                   concurrency: Optional[int] = None) -> list:
         """
         Synchronous, thread-safe multi-URL fetch with GENUINE concurrent
         network I/O (all URLs are in flight on the background loop at once,
@@ -452,11 +499,23 @@ class BrowserManager:
         entries are None instead of raising, so one bad page doesn't sink
         the batch.
         """
+        # Bound each URL's whole retry cycle, so one wedged page costs that
+        # URL rather than the batch. The clock starts once the URL holds a
+        # turn, not while it queues behind the rest of the batch -- otherwise
+        # a long batch times out its own tail before fetching it.
+        # Cancellation still runs the fetch's finally-block, which hands its
+        # page slot back.
+        per_url = (timeout / 1000) * retries + 10
+
         async def _gather():
-            return await asyncio.gather(
-                *(self._fetch_one_async(u, timeout, retries) for u in urls),
-                return_exceptions=True,
-            )
+            turns = asyncio.Semaphore(min(concurrency or self._POOL_SIZE, self._POOL_SIZE))
+
+            async def one(u):
+                async with turns:
+                    return await asyncio.wait_for(
+                        self._fetch_one_async(u, timeout, retries), per_url)
+
+            return await asyncio.gather(*(one(u) for u in urls), return_exceptions=True)
         results = self.run(_gather())
         return [r if not isinstance(r, Exception) else None for r in results]
 
@@ -1310,6 +1369,45 @@ class GeMCrawler:
         }
 
     _build_product_url = staticmethod(build_product_url)
+
+    def live_prices(self, urls: list) -> dict:
+        """
+        Price each listing from its own product page, concurrently.
+
+        Returns {url: price or None}. None means the page couldn't be read
+        or didn't clearly price this listing -- callers keep the search
+        price for those and must not count them as checked.
+        """
+        urls = [u for u in dict.fromkeys(urls) if u]
+        if not urls:
+            return {}
+
+        # A burst of product-page requests gets throttled in a way the
+        # redirect check can't see: GeM answers AT the product URL with its
+        # homepage. Such a page has no product variant id, so no price is
+        # read from it (correctly), but it isn't an answer either -- retry
+        # those listings in smaller, slower rounds.
+        prices = {}
+        pending = urls
+        for round_no, concurrency in enumerate((4, 2, 1)):
+            if round_no:
+                time.sleep(3 * round_no)
+            pages = self._bm.fetch_many(pending, timeout=20000, retries=2, concurrency=concurrency)
+            throttled = []
+            for u, html in zip(pending, pages):
+                prices[u] = live_price_from_page(u, html)
+                if prices[u] is None and html and "default_variant_id" not in html:
+                    throttled.append(u)
+            if not throttled:
+                break
+            logger.info(f"[Crawler] {len(throttled)} product pages came back as GeM's homepage "
+                        f"(throttled); retrying at concurrency {(4, 2, 1)[min(round_no + 1, 2)]}")
+            pending = throttled
+
+        read = sum(v is not None for v in prices.values())
+        if read < len(urls):
+            logger.info(f"[Crawler] Page prices: {read}/{len(urls)} read")
+        return prices
 
     def _parse_facets(self, facets: dict) -> list:
         """Parse facets JSON into a list of filter definitions."""

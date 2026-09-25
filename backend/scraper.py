@@ -17,11 +17,11 @@ from gem_utils import (
     build_product_url,
     extract_inline_specs,
     extract_specs_from_soup,
+    live_price_from_page,
     make_name_resolver,
     names_match,
     normalize_filter_value,
     parse_fragment_params,
-    parse_price,
     pull_facet_values,
     query_values_for,
     split_composite_value,
@@ -93,14 +93,17 @@ class GeMScraper:
             logger.warning(f"[FastPrice] Price check failed for {base_url}: {e}")
             return failed
 
-        prices = [
-            price for c in data.get("catalogs", [])
+        listings = [
+            {"price": price, "url": build_product_url(c)}
+            for c in data.get("catalogs", [])
             if (price := int(c.get("final_price", {}).get("value", 0))) > 0
         ]
+        prices = [l["price"] for l in listings]
         return {
             "min_price":     min(prices) if prices else None,
             "total":         data.get("number_of_results", 0),
             "product_count": len(prices),
+            "listings":      listings,
             "error":         False,
         }
 
@@ -170,10 +173,7 @@ class GeMScraper:
         if name_el:
             product_name = name_el.get_text(strip=True)[:120]
 
-        product_price = None
-        price_el = soup.select_one(".price, [class*='price'], .final-price")
-        if price_el:
-            product_price = parse_price(price_el.get_text(strip=True))
+        product_price = live_price_from_page(product_url, html)
 
         logger.info(f"[SurgicalStrike] Extracted {len(raw_specs)} specs from product")
 
@@ -286,7 +286,27 @@ class GeMScraper:
                     "wouldWin": (verification == "confirmed"
                                  and min_price is not None and min_price > target_price),
                     "verification": verification,
+                    "_urls": [l["url"] for l in scrape_result.get("listings", []) if l.get("url")],
                 })
+
+        # GeM's search index lags behind price cuts, and a counter-filter that
+        # "wins" on index prices can be beaten on the pages buyers actually
+        # pay from. Re-price the listings behind every claimed win.
+        claimed = [cf for cf in counter_filters if cf["wouldWin"]]
+        if claimed:
+            from crawler import GeMCrawler
+            urls = [u for cf in claimed for u in cf.get("_urls", [])]
+            page_prices = GeMCrawler().live_prices(urls)
+            api_calls += len(page_prices)
+            for cf in claimed:
+                live = [v for u in cf.get("_urls", []) if (v := page_prices.get(u)) is not None]
+                if live and min(live) < (cf["resultMinPrice"] or float("inf")):
+                    cf["searchMinPrice"] = cf["resultMinPrice"]
+                    cf["resultMinPrice"] = min(live)
+                cf["wouldWin"] = cf["resultMinPrice"] is not None and cf["resultMinPrice"] > target_price
+                cf["pageChecked"] = len(live)
+        for cf in counter_filters:
+            cf.pop("_urls", None)
 
         # Sort: wins first, then verified non-wins, then anything unverified
         _rank = {"confirmed": 1, "unrecognized": 2, "unverified": 2, "ignored": 3}

@@ -288,3 +288,50 @@ def extract_specs_from_soup(soup) -> dict:
                     specs[name] = value
 
     return specs
+
+
+# ── Live product-page prices ─────────────────────────────────────────────────
+
+_LISTING_ID_RE = re.compile(r"/p-(\d+-\d+)-cat\.html")
+_DEFAULT_VARIANT_RE = re.compile(r'default_variant_id\s*:\s*"([^"]+)"')
+_DECIMAL_PRICE_RE = re.compile(r"([0-9][0-9,]*)\.\d\d")
+
+
+def listing_id(url: str):
+    """The variant id a product URL names, e.g. '5116877-42875742973'."""
+    m = _LISTING_ID_RE.search(url or "")
+    return m.group(1) if m else None
+
+
+def live_price_from_page(url: str, html: str):
+    """
+    The price a buyer sees on a listing's own page, or None if the page
+    doesn't let us say for certain.
+
+    GeM's search index lags behind price changes: a seller who cuts a
+    listing from 6,990 to 2,500 can stay at 6,990 in search for a while,
+    while the product page already charges 2,500. The page is what the
+    buyer pays, so it is the price that decides L1.
+
+    We read the price the page attaches to THIS listing's variant id. If
+    the page resolved to a different variant, its price belongs to a
+    different listing, and we return None rather than borrow it.
+    """
+    if not html:
+        return None
+    want = listing_id(url)
+    got = _DEFAULT_VARIANT_RE.search(html)
+    if want and got and got.group(1) != want:
+        return None
+
+    if want:
+        k = html.find(f'"{want}":{{"price"')
+        if k != -1:
+            m = _DECIMAL_PRICE_RE.search(html, k, k + 800)
+            if m:
+                return parse_price(m.group(1))
+
+    # Older page layouts: the add-to-cart block carries the same price.
+    from bs4 import BeautifulSoup
+    el = BeautifulSoup(html, HTML_PARSER).select_one("#price .final-price, .final-price")
+    return parse_price(el.get_text(" ", strip=True)) if el else None

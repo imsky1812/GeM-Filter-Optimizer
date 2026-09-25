@@ -32,6 +32,13 @@
 }
 .res-summary dd.is-up { color: var(--success); }
 
+.res-provenance {
+  margin: 12px 0 0; padding: 0 2px 16px; border-bottom: 1px solid var(--glass-border);
+  font-family: var(--font-small); font-size: 12px; line-height: 1.55; color: var(--ink-subtle);
+}
+.res-provenance strong { color: var(--amber); font-family: var(--font-num); }
+.res-summary:has(+ .res-provenance) { border-bottom: 0; padding-bottom: 0; }
+
 /* Path switcher: one line, not a wall of pills. */
 .res-paths { padding: 16px 0; border-bottom: 1px solid var(--glass-border); }
 .res-paths-bar {
@@ -139,6 +146,11 @@
 .res-rival-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .res-rival-brand { font-family: var(--font-small); font-size: 12px; color: var(--ink-subtle); }
 .res-rival-price { font-family: var(--font-num); font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.res-rival-stale {
+  font-family: var(--font-small); font-size: 11.5px; color: var(--amber);
+}
+.res-rival-stale s { text-decoration-color: rgba(234, 179, 8, .6); }
 
 /* Unconfirmed leads */
 .res-lead-list { list-style: none; margin: 12px 0 0; padding: 0; }
