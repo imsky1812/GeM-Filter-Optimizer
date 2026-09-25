@@ -11,6 +11,8 @@ import ChainHuntResults from "./components/ChainHuntResults.jsx";
 import CompetitorSpecsModal from "./components/CompetitorSpecsModal.jsx";
 import StepIndicator from "./components/StepIndicator.jsx";
 import ToolChoice from "./components/ToolChoice.jsx";
+import Landing from "./components/Landing.jsx";
+import usePointerSpotlight from "./usePointerSpotlight.js";
 
 const BACKEND_URL = "/api";
 
@@ -34,6 +36,8 @@ const withProtocol = (url) => {
 };
 
 export default function App() {
+  usePointerSpotlight(); // cursor glow, landing and wizard alike
+  const [view, setView] = useState("landing"); // "landing" | "app"
   const [gemUrl, setGemUrl] = useState("");
   const [sellerPrice, setSellerPrice] = useState("");
   const [scrapedData, setScrapedData] = useState(null);
@@ -282,9 +286,13 @@ export default function App() {
     ? Math.min(...scrapedData.products.map((p) => p.price))
     : 0;
 
+  if (view === "landing") {
+    return <Landing onLaunch={() => setView("app")} />;
+  }
+
   return (
     <div className={`app${currentStep === 4 ? " app-wide" : ""}`}>
-      <Header />
+      <Header onHome={() => setView("landing")} />
 
       <StepIndicator
         currentStep={currentStep}

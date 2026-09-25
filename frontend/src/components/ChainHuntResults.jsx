@@ -58,6 +58,26 @@ export default function ChainHuntResults({
             <div className="chain-loading-bar">
               <div className="chain-loading-fill" />
             </div>
+            {/* The phases a run actually moves through, so the wait reads as
+                progress rather than a spinner. */}
+            <ol className="run-phases">
+              <li className="run-phase is-on">
+                <span className="tag">scan</span>
+                <span className="txt">Indexing products and golden filters</span>
+              </li>
+              <li className="run-phase is-on">
+                <span className="tag">hunt</span>
+                <span className="txt">Combining filters up to four deep, in memory</span>
+              </li>
+              <li className="run-phase is-on">
+                <span className="tag">verify</span>
+                <span className="txt">Re-checking the best candidates against GeM live</span>
+              </li>
+              <li className="run-phase">
+                <span className="tag">result</span>
+                <span className="txt">Ranking the paths that clear your price</span>
+              </li>
+            </ol>
           </div>
         )}
 

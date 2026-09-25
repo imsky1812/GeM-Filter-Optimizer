@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Sun, Moon } from "@phosphor-icons/react";
+import { Sun, Moon, ArrowLeft } from "@phosphor-icons/react";
 
 function getInitialTheme() {
   // Black by default -- only an explicit prior toggle switches it to light.
@@ -7,7 +7,7 @@ function getInitialTheme() {
   return stored === "light" ? "light" : "dark";
 }
 
-export default function Header() {
+export default function Header({ onHome }) {
   const [theme, setTheme] = useState(getInitialTheme);
 
   useEffect(() => {
@@ -18,6 +18,11 @@ export default function Header() {
   return (
     <div className="hdr">
       <div>
+        {onHome && (
+          <button type="button" className="hdr-home" onClick={onHome}>
+            <ArrowLeft size={14} weight="bold" /> Home
+          </button>
+        )}
         <div className="hdr-eyebrow-row">
           <span className="hdr-eyebrow">GeM India · Rank Engine</span>
           <span className="hdr-dots" aria-hidden="true" />

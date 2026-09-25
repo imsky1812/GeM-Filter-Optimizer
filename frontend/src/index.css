@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Jost:wght@300;400;500;600;700&family=Karla:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    OBSIDIAN PRECISION — Design System for GeM Filter Optimizer v5
@@ -64,9 +64,11 @@
   --grain-opacity: 0.05;
 
   /* Typography */
-  --font-body:    'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono:    var(--font-body);
-  --font-display: 'Space Grotesk', var(--font-body);
+  --font-body:    'Jost', system-ui, -apple-system, sans-serif;
+  --font-mono:    'Space Mono', ui-monospace, monospace;
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --font-small:   'Karla', system-ui, -apple-system, sans-serif;
+  --font-num:     'Playfair Display', Georgia, serif;
 
   /* Radii */
   --radius-xs:   4px;
@@ -2496,5 +2498,104 @@ input:focus {
   }
 }
 
+/* Return to the landing page from the wizard header */
+.hdr-home {
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px;
+  padding: 7px 12px; border-radius: 8px;
+  background: var(--glass); border: 1px solid var(--glass-border);
+  color: var(--ink-muted); font-family: var(--font-body); font-size: 12.5px;
+  font-weight: 600; cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, transform .15s ease;
+}
+.hdr-home:hover { color: var(--ink); border-color: var(--surface-4); transform: translateY(-1px); }
 
+/* ═══ SHARED WITH THE LANDING ═══════════════════════════════════════════════
+   The wizard carries the same type system and dot field, so moving between
+   the landing and the tool doesn't feel like two products. ════════════════ */
 
+/* Figures in the luxury numeral face, aligned in columns. */
+.chain-stat-val, .stuck-stat-value, .chain-victory-price, .chain-blocker-price,
+.competitor-insights-card-price, .strike-competitor-price, .price-alert,
+.chain-new-l1 strong, .price-wrap input, .price-sym {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Small text in Karla, the way the landing sets it. */
+.card-desc, .text-xs-subtle, .chain-stat-lbl, .stuck-stat-label, .counter-info-sub,
+.chain-loading-sub, .unconfirmed-desc, .unconfirmed-stats, .modal-meta-item,
+.step-indicator-label, .empty-subtext, .chain-badge-text {
+  font-family: var(--font-small);
+}
+
+/* The same dot field, behind the app shell. */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(245, 245, 247, .22) 1.15px, transparent 1.15px);
+  background-size: 30px 30px;
+}
+:root[data-theme="light"] body::before {
+  background-image: radial-gradient(rgba(21, 21, 26, .12) 1.15px, transparent 1.15px);
+}
+.app { position: relative; z-index: 1; }
+
+/* Focus rings, matching the landing. */
+.app :is(a, button, summary, input, select):focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 3px;
+}
+
+/* Lining figures everywhere: Cormorant's default old-style "1" reads as a
+   lowercase dotless i in headings like "Find Your L1 Rank". */
+body { font-variant-numeric: lining-nums; }
+
+/* Cursor spotlight, app-wide. usePointerSpotlight sets --mx/--my on :root
+   and only arms this on fine pointers without a reduced-motion request. */
+:root[data-spotlight="on"] body::after {
+  content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(460px 460px at var(--mx, 50%) var(--my, 24%), var(--primary-glow), transparent 68%);
+}
+:root[data-theme="light"][data-spotlight="on"] body::after { opacity: .6; }
+
+/* ═══ TOOL CHROME ══════════════════════════════════════════════════════════
+   The landing's finish, carried onto the wizard's own surfaces. ══════════ */
+
+/* A lit edge on the working surface, like the landing's product window. */
+.card { position: relative; }
+.card::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+  background: linear-gradient(140deg, rgba(240, 53, 63, .40), rgba(255, 255, 255, .08) 38%, rgba(255, 255, 255, 0) 66%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude; pointer-events: none;
+}
+:root[data-theme="light"] .card::after {
+  background: linear-gradient(140deg, rgba(240, 53, 63, .30), rgba(21, 21, 26, .05) 38%, transparent 66%);
+}
+
+/* The step you're on gets a halo; the rail behind you fills with the accent. */
+.step-indicator-node[data-state="current"] {
+  box-shadow: 0 0 0 4px var(--primary-glow), 0 0 18px var(--primary-glow);
+}
+.step-indicator-line[data-state="done"] {
+  background: linear-gradient(90deg, var(--primary), var(--primary-bright));
+}
+
+/* Run phases under the hunt's progress bar. */
+.run-phases {
+  list-style: none; margin: 18px auto 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px;
+  width: 100%; max-width: 420px; text-align: left;
+}
+.run-phase {
+  display: flex; align-items: baseline; gap: 12px;
+  font-family: var(--font-mono); font-size: 12.5px;
+  opacity: .38; transition: opacity .4s ease;
+}
+.run-phase.is-on { opacity: 1; }
+.run-phase .tag { width: 54px; flex-shrink: 0; color: var(--primary); }
+.run-phase .txt { color: var(--ink-muted); font-family: var(--font-small); font-size: 13px; }
+.run-phase.is-on .tag { color: var(--success); }
+
+@media (prefers-reduced-motion: reduce) {
+  .run-phase { transition: none; }
+}
