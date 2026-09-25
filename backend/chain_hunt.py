@@ -564,11 +564,13 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
             "l3": format_competitor(valid_products[1])
         }
 
-    def build_iterations(steps_list, live_res=None, can_win=False):
+    def build_iterations(steps_list, can_win=False):
         """
-        Per-step breakdown of a filter path. Intermediate steps use in-memory
-        estimates; the final step uses the live-verified numbers when
-        `live_res` is given. Only `can_win` paths may label a step L1_WIN.
+        Per-step breakdown of a filter path, measured entirely against the
+        scanned sample so the columns stay comparable from row to row. The
+        live-verified numbers for the finished path live on the path itself
+        (nicheMinPrice / totalProducts / sellerCount). Only `can_win` paths
+        may label a step L1_WIN.
         """
         iterations = []
         curr_act = {}
@@ -576,15 +578,16 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         for idx, (gf, val) in enumerate(steps_list):
             curr_act[gf["filterKey"]] = val
 
-            if live_res is not None and idx == len(steps_list) - 1:
-                new_min = live_res["min_price"]
-                new_total = live_res["total"]
-                sellers_count = live_res["seller_count"]
-            else:
-                step_eval = evaluate_state(curr_act)
-                new_min = step_eval["min_price"]
-                new_total = step_eval["total"]
-                sellers_count = step_eval["sellers"]
+            # Every step is measured against the same scanned sample. Mixing in
+            # the live totals on the last step only (as this used to do) made a
+            # narrowing step look like it GREW the niche -- 240 sampled products
+            # followed by 2,527 live ones -- because the denominator changed
+            # under the reader. The live-verified figures for the finished path
+            # are reported separately, on the path itself.
+            step_eval = evaluate_state(curr_act)
+            new_min = step_eval["min_price"]
+            new_total = step_eval["total"]
+            sellers_count = step_eval["sellers"]
 
             if new_min is not None and prev_min is not None and new_min <= prev_min:
                 result = "LATERAL"
@@ -605,13 +608,14 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                 "newMinPrice": new_min,
                 "newTotal": new_total,
                 "sellerCount": sellers_count,
+                "scope": "sample",
             })
             prev_min = new_min
         return iterations
 
     def format_verified_path(active_dict, steps_list, live_res, status, is_untapped):
         return {
-            "iterations": build_iterations(steps_list, live_res, can_win=(status == "WIN")),
+            "iterations": build_iterations(steps_list, can_win=(status == "WIN")),
             "activeFilters": {**start_filters, **active_dict},
             "status": status,
             "isUntapped": is_untapped,
@@ -726,4 +730,5 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
         "bestAchievablePrice": best_achievable if best_achievable > 0 else None,
         "marketMinPrice": market_min_price,
         "targetPrice": target_price,
+        "sampleSize": len(start_products),
     }

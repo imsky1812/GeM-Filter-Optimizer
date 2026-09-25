@@ -166,7 +166,7 @@ export default function ChainHuntResults({
       </header>
 
       {path && (
-        <dl className="res-summary">
+        <dl className="res-summary" data-scope="live">
           <div>
             <dt>Your price</dt>
             <dd>{money(priceNum)}</dd>
@@ -249,7 +249,13 @@ export default function ChainHuntResults({
       {/* ── How it got there ───────────────────────────────────── */}
       {steps.length > 0 && (
         <section className="res-section">
-          <h3 className="res-section-title">Elimination steps</h3>
+          <h3 className="res-section-title">
+            Elimination steps
+            <span className="res-section-note">
+              Counted against the {chainResults.sampleSize?.toLocaleString() ?? "scanned"} products
+              scanned — the figures above are GeM-verified live
+            </span>
+          </h3>
           <ol className="res-steps">
             {steps.map((step, i) => (
               <Step key={i} step={step} index={i} isLast={i === steps.length - 1} />
@@ -266,7 +272,9 @@ export default function ChainHuntResults({
         <section className="res-section">
           <h3 className="res-section-title">
             Who you'd sit above
-            <span className="res-section-note">Click a listing for its live specs</span>
+            <span className="res-section-note">
+              Priced as GeM's search lists them; a listing's own page can quote a different offer price
+            </span>
           </h3>
           <div className="res-rivals">
             <CompetitorCard role="L2" competitor={path.competitorInsights.l2} onOpen={onFetchCompetitorSpecs} />
