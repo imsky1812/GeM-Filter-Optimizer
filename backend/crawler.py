@@ -436,6 +436,10 @@ class BrowserManager:
                 await self.release_page_async(page)
         raise RuntimeError(f"Fetch failed after {retries} attempts: {last_err}")
 
+    async def fetch_async(self, url: str, timeout: int = 30000, retries: int = 3) -> str:
+        """Awaitable fetch for code already running on the background loop."""
+        return await self._fetch_one_async(url, timeout, retries)
+
     def fetch(self, url: str, timeout: int = 30000, retries: int = 3) -> str:
         """Synchronous, thread-safe single-URL fetch. Blocks the caller."""
         return self.run(self._fetch_one_async(url, timeout, retries))
@@ -744,7 +748,7 @@ class GeMCrawler:
             logger.error(f"[Crawler] Filtered crawl failed: {e}")
             return {"min_price": None, "total": 0, "product_count": 0, "seller_count": 0, "error": True}
 
-    async def _unfiltered_total_async(self, page, base_url: str, location: str, base_params: dict):
+    async def _unfiltered_total_async(self, base_url: str, location: str, base_params: dict):
         """
         Result count for this category with no spec filters applied, cached
         per category. Used to spot a filter GeM silently ignored: an
@@ -764,9 +768,9 @@ class GeMCrawler:
             query["localized_search"] = location
 
         try:
-            response = await page.goto(f"{base_url}?{urlencode(query)}", timeout=20000,
-                                       wait_until="domcontentloaded")
-            json_text = _extract_json_text(await _page_body(page, response))
+            json_text = _extract_json_text(
+                await self._bm.fetch_async(f"{base_url}?{urlencode(query)}", timeout=20000, retries=3)
+            )
             if json_text is None:
                 return None
             total = json.loads(json_text).get("number_of_results", 0)
@@ -778,47 +782,57 @@ class GeMCrawler:
         return total
 
     async def _crawl_filtered_prices_async(self, url: str, filters: dict, location: str) -> dict:
+        """
+        Every request here goes through BrowserManager.fetch_async, which
+        retries with backoff. GeM aborts a navigation now and then
+        (net::ERR_ABORTED); doing a bare page.goto meant one such abort threw
+        the whole verification away, and the chain hunt silently dropped that
+        candidate path as if it had been checked and rejected.
+        """
         base_url, fragment_params = self._normalize_url(url)
         base_params = {k: v for k, v in fragment_params.items() if k not in filters}
         fragment_params.update(filters)
 
-        page = await self._bm.acquire_page_async()
+        query_params = {"page": 1, "format": "json", "sort_type": "price_in_asc"}
+        for k, v in fragment_params.items():
+            if k.lower() not in ("page", "format", "sort_type"):
+                query_params[k] = self._normalize_filter_value(v)
+        if location and location.lower() not in ("", "all india", "all"):
+            query_params["localized_search"] = location
+
+        failed = {"min_price": None, "total": 0, "product_count": 0,
+                  "seller_count": 0, "error": True}
+
+        api_url = f"{base_url}?{urlencode(query_params)}"
         try:
-            query_params = {"page": 1, "format": "json", "sort_type": "price_in_asc"}
-            for k, v in fragment_params.items():
-                if k.lower() not in ("page", "format", "sort_type"):
-                    query_params[k] = self._normalize_filter_value(v)
-            if location and location.lower() not in ("", "all india", "all"):
-                query_params["localized_search"] = location
+            text = await self._bm.fetch_async(api_url, timeout=20000, retries=3)
+        except Exception as e:
+            logger.warning(f"[Crawler] Filtered-price fetch failed after retries for {api_url}: {e}")
+            return failed
 
-            api_url = f"{base_url}?{urlencode(query_params)}"
-            response = await page.goto(api_url, timeout=20000, wait_until="domcontentloaded")
+        json_text = _extract_json_text(text)
+        if json_text is None:
+            # A WAF block page, login redirect, or captcha interstitial also
+            # fails this parse -- that is NOT the same thing as GeM telling us
+            # the niche is genuinely empty. Callers rely on `error` to tell
+            # "0 real results" apart from "couldn't even read a response".
+            logger.warning(
+                f"[Crawler] Filtered-price response wasn't JSON for {api_url} "
+                f"-- treating as a failed verification, not a real 0. "
+                f"First 200 chars: {text[:200]!r}"
+            )
+            return failed
 
-            text = await _page_body(page, response)
-            json_text = _extract_json_text(text)
-            if json_text is None:
-                # A WAF block page, login redirect, or captcha interstitial also
-                # fails this parse -- that is NOT the same thing as GeM telling us
-                # the niche is genuinely empty. Callers (chain_hunt's mismatch
-                # guard) rely on `error` to tell "0 real results" apart from
-                # "couldn't even read a response"; conflating them here is what
-                # made every blocked verification masquerade as a confirmed
-                # untapped niche and get silently discarded downstream.
-                logger.warning(
-                    f"[Crawler] Filtered-price response wasn't JSON for {api_url} "
-                    f"-- treating as a failed verification, not a real 0. "
-                    f"First 200 chars: {text[:200]!r}"
-                )
-                return {"min_price": None, "total": 0, "product_count": 0, "seller_count": 0, "error": True}
+        data = json.loads(json_text)
+        total = data.get("number_of_results", 0)
+        catalogs = data.get("catalogs", [])
 
-            data = json.loads(json_text)
-            total = data.get("number_of_results", 0)
-            catalogs = data.get("catalogs", [])
+        prices = []
+        sellers = set()
+        products_out = []
 
-            prices = []
-            sellers = set()
-            products_out = []
-            for cat in catalogs:
+        def collect(items):
+            for cat in items:
                 price = int(cat.get("final_price", {}).get("value", 0))
                 if price <= 0:
                     continue
@@ -836,59 +850,44 @@ class GeMCrawler:
                     "url": self._build_product_url(cat),
                 })
 
-            # Fetch page 2 for better seller diversity
-            if total > len(catalogs):
-                try:
-                    query_params["page"] = 2
-                    p2_url = f"{base_url}?{urlencode(query_params)}"
-                    response2 = await page.goto(p2_url, timeout=15000, wait_until="domcontentloaded")
-                    json_text2 = _extract_json_text(await _page_body(page, response2))
-                    if json_text2 is not None:
-                        d2 = json.loads(json_text2)
-                        for cat in d2.get("catalogs", []):
-                            price = int(cat.get("final_price", {}).get("value", 0))
-                            if price <= 0:
-                                continue
-                            prices.append(price)
-                            sid = seller_key(cat.get("seller", {}))
-                            if sid:
-                                sellers.add(sid)
-                            products_out.append({
-                                "id": str(cat.get("id", "")),
-                                "name": cat.get("title", ""),
-                                "price": price,
-                                "seller": cat.get("seller", {}).get("name", ""),
-                                "seller_id": sid,
-                                "brand": cat.get("brand", ""),
-                                "url": self._build_product_url(cat),
-                            })
-                except Exception:
-                    pass
+        collect(catalogs)
 
-            # Did GeM actually apply our filters? An unrecognised key is
-            # silently dropped, and the response then describes the whole
-            # category -- a wrong answer that looks like a real one.
-            ignored = False
-            if filters:
-                baseline = await self._unfiltered_total_async(page, base_url, location, base_params)
-                if baseline and total == baseline:
-                    logger.warning(
-                        f"[Crawler] Filters {list(filters)} returned the unfiltered category "
-                        f"total ({total}) -- GeM ignored them, so this is not a verification."
-                    )
-                    ignored = True
+        # Page 2, for better seller diversity. Optional: a failure here leaves
+        # page 1's answer intact rather than sinking the verification.
+        if total > len(catalogs):
+            try:
+                query_params["page"] = 2
+                json_text2 = _extract_json_text(
+                    await self._bm.fetch_async(f"{base_url}?{urlencode(query_params)}",
+                                               timeout=15000, retries=2)
+                )
+                if json_text2:
+                    collect(json.loads(json_text2).get("catalogs", []))
+            except Exception as e:
+                logger.info(f"[Crawler] Page 2 skipped for {base_url}: {e}")
 
-            return {
-                "min_price": min(prices) if prices else None,
-                "total": total,
-                "product_count": len(prices),
-                "seller_count": len(sellers),
-                "products": products_out,
-                "error": False,
-                "ignored": ignored,
-            }
-        finally:
-            await self._bm.release_page_async(page)
+        # Did GeM actually apply our filters? An unrecognised key is silently
+        # dropped, and the response then describes the whole category -- a
+        # wrong answer that looks like a real one.
+        ignored = False
+        if filters:
+            baseline = await self._unfiltered_total_async(base_url, location, base_params)
+            if baseline and total == baseline:
+                logger.warning(
+                    f"[Crawler] Filters {list(filters)} returned the unfiltered category "
+                    f"total ({total}) -- GeM ignored them, so this is not a verification."
+                )
+                ignored = True
+
+        return {
+            "min_price": min(prices) if prices else None,
+            "total": total,
+            "product_count": len(prices),
+            "seller_count": len(sellers),
+            "products": products_out,
+            "error": False,
+            "ignored": ignored,
+        }
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # INTERNAL: JSON API Crawl (fast path)

@@ -1,33 +1,92 @@
+import "./Results.css";
+import { useState } from "react";
 import {
   Lightning,
   CheckCircle,
   Warning,
   XCircle,
-  Prohibit,
   Lightbulb,
   ArrowClockwise,
-  MagnifyingGlass,
-  Trophy,
-  Star,
-  Target,
+  CaretLeft,
+  CaretRight,
+  ArrowRight,
 } from "@phosphor-icons/react";
 
-// Fixed spread (not randomized per render) so the burst is stable and doesn't
-// jitter if the component re-renders while the animation is still playing.
-const CONFETTI = [
-  { x: -70, y: -55, r: -120, color: "var(--success)" },
-  { x: -50, y: -75, r: 200, color: "var(--primary)" },
-  { x: -25, y: -85, r: -80, color: "var(--amber)" },
-  { x: 0, y: -90, r: 160, color: "var(--success-bright)" },
-  { x: 25, y: -85, r: -200, color: "var(--primary-bright)" },
-  { x: 50, y: -75, r: 90, color: "var(--amber-bright)" },
-  { x: 70, y: -55, r: -160, color: "var(--success)" },
-  { x: -40, y: -30, r: 220, color: "var(--primary)" },
-  { x: 40, y: -30, r: -140, color: "var(--amber)" },
-  { x: -85, y: -20, r: 100, color: "var(--success-bright)" },
-  { x: 85, y: -20, r: -100, color: "var(--primary-bright)" },
-  { x: 0, y: -40, r: 300, color: "var(--amber-bright)" },
-];
+const money = (n) => (n == null ? "—" : `₹${n.toLocaleString()}`);
+
+/** GeM filter names trail a long parenthetical spec range; the title keeps it. */
+const shortName = (s) => (s || "").replace(/\s*\([^)]*\)\s*$/, "");
+
+const filterLine = (activeFilters, filters) =>
+  Object.entries(activeFilters || {})
+    .map(([key, val]) => {
+      const gf = filters?.find((f) => f.filterKey === key);
+      return `${shortName(gf?.filterName || key)}: ${val}`;
+    })
+    .join("  ·  ");
+
+/** One elimination step: the filter applied, and what it did to the floor. */
+function Step({ step, index, isLast }) {
+  const lifted =
+    step.newMinPrice != null && step.prevMinPrice != null && step.newMinPrice > step.prevMinPrice;
+
+  return (
+    <li className="res-step">
+      <span className="res-step-rail" aria-hidden="true">
+        <span className="res-step-node">{index + 1}</span>
+        {!isLast && <span className="res-step-line" />}
+      </span>
+
+      <div className="res-step-body">
+        <div className="res-step-filter">
+          <span className="res-step-name" title={step.filterApplied?.filterName}>
+            {shortName(step.filterApplied?.filterName)}
+          </span>
+          <ArrowRight size={13} weight="bold" className="res-step-arrow" />
+          <span className="res-step-value">{step.filterApplied?.value}</span>
+        </div>
+
+        <dl className="res-step-effect">
+          <div>
+            <dt>Floor</dt>
+            <dd className={lifted ? "is-up" : ""}>
+              {money(step.newMinPrice)}
+              {lifted && <span className="res-delta">+{(step.newMinPrice - step.prevMinPrice).toLocaleString()}</span>}
+            </dd>
+          </div>
+          <div>
+            <dt>Products</dt>
+            <dd>{step.newTotal?.toLocaleString() ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Sellers</dt>
+            <dd>{step.sellerCount ?? "—"}</dd>
+          </div>
+        </dl>
+      </div>
+    </li>
+  );
+}
+
+function CompetitorCard({ role, competitor, onOpen }) {
+  if (!competitor) return null;
+  // GeM prefixes listing titles with the seller name, which we already show below.
+  const brand = competitor.brand || "";
+  const name =
+    brand && competitor.name?.startsWith(brand)
+      ? competitor.name.slice(brand.length).replace(/^[\s\-–—]+/, "")
+      : competitor.name;
+  return (
+    <button type="button" className="res-rival" onClick={() => onOpen(competitor, role)}>
+      <span className="res-rival-role">{role}</span>
+      <span className="res-rival-name" title={competitor.name}>{name}</span>
+      <span className="res-rival-meta">
+        <span className="res-rival-brand">{brand || "Unknown seller"}</span>
+        <span className="res-rival-price">{money(competitor.price)}</span>
+      </span>
+    </button>
+  );
+}
 
 export default function ChainHuntResults({
   chainStatus,
@@ -38,405 +97,231 @@ export default function ChainHuntResults({
   chainPathIdx,
   setChainPathIdx,
   scrapedData,
-  onFetchCompetitorSpecs
+  onFetchCompetitorSpecs,
 }) {
+  const [showAllPaths, setShowAllPaths] = useState(false);
   if (chainStatus === "idle") return null;
+
+  if (chainStatus === "loading") {
+    return (
+      <div className="card fade-in fade-in-d2">
+        <div className="chain-loading">
+          <span className="spin spin-amber" />
+          <div className="chain-loading-title">
+            <Lightning size={16} weight="fill" className="inline-icon" /> Hunting your L1 path
+          </div>
+          <div className="chain-loading-sub">
+            Eliminating blockers one by one, re-checking the market against GeM after
+            every filter change.
+          </div>
+          <div className="chain-loading-bar"><div className="chain-loading-fill" /></div>
+          <ol className="run-phases">
+            <li className="run-phase is-on"><span className="tag">scan</span><span className="txt">Indexing products and golden filters</span></li>
+            <li className="run-phase is-on"><span className="tag">hunt</span><span className="txt">Combining filters up to four deep, in memory</span></li>
+            <li className="run-phase is-on"><span className="tag">verify</span><span className="txt">Re-checking the best candidates against GeM live</span></li>
+            <li className="run-phase"><span className="tag">result</span><span className="txt">Ranking the paths that clear your price</span></li>
+          </ol>
+        </div>
+      </div>
+    );
+  }
+
+  if (chainStatus === "error") {
+    return (
+      <div className="card fade-in fade-in-d2">
+        <div className="err-box">
+          {chainError}
+          <div className="flex-row-gap-16">
+            <button className="btn btn-primary flex-1" onClick={onChainHunt}>Retry</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!chainResults) return null;
+
+  const paths = chainResults.winningPaths || [];
+  const unconfirmed = chainResults.unconfirmedPaths || [];
+  const hasPaths = paths.length > 0;
+  const isWin = chainResults.status === "WIN";
+  const path = hasPaths ? paths[chainPathIdx] || paths[0] : null;
+  const steps = path?.iterations || [];
+  const gap = path?.nicheMinPrice != null ? path.nicheMinPrice - priceNum : null;
+
+  const HeadIcon = isWin ? CheckCircle : hasPaths ? Warning : XCircle;
+  const tone = isWin ? "win" : hasPaths ? "partial" : "none";
+  const headline = isWin
+    ? "Your price is the cheapest in this niche."
+    : hasPaths
+    ? `Best floor these filters reach is ${money(chainResults.bestAchievablePrice)} — someone still undercuts your ${money(priceNum)}.`
+    : `No filter combination makes you L1 at ${money(priceNum)}.`;
 
   return (
     <div className="card fade-in fade-in-d2">
-      <div className="chain-hunt-panel">
-        {chainStatus === "loading" && (
-          <div className="chain-loading">
-            <span className="spin spin-amber" />
-            <div className="chain-loading-title">
-              <Lightning size={16} weight="fill" className="inline-icon" /> Hunting Your L1 Path
-            </div>
-            <div className="chain-loading-sub">
-              Eliminating blockers one by one, re-scraping the market after every
-              filter change. Two to five minutes, worth the wait.
-            </div>
-            <div className="chain-loading-bar">
-              <div className="chain-loading-fill" />
-            </div>
-            {/* The phases a run actually moves through, so the wait reads as
-                progress rather than a spinner. */}
-            <ol className="run-phases">
-              <li className="run-phase is-on">
-                <span className="tag">scan</span>
-                <span className="txt">Indexing products and golden filters</span>
-              </li>
-              <li className="run-phase is-on">
-                <span className="tag">hunt</span>
-                <span className="txt">Combining filters up to four deep, in memory</span>
-              </li>
-              <li className="run-phase is-on">
-                <span className="tag">verify</span>
-                <span className="txt">Re-checking the best candidates against GeM live</span>
-              </li>
-              <li className="run-phase">
-                <span className="tag">result</span>
-                <span className="txt">Ranking the paths that clear your price</span>
-              </li>
-            </ol>
-          </div>
-        )}
+      {/* ── The answer ─────────────────────────────────────────── */}
+      <header className="res-head" data-tone={tone}>
+        <HeadIcon size={20} weight="fill" className="res-head-icon" />
+        <h2 className="res-headline">{headline}</h2>
+      </header>
 
-        {chainStatus === "error" && (
-          <div className="err-box margin-top-16">
-            {chainError}
-            <div className="flex-row-gap-16">
-              <button className="btn btn-primary flex-1" onClick={onChainHunt}>
-                Retry
+      {path && (
+        <dl className="res-summary">
+          <div>
+            <dt>Your price</dt>
+            <dd>{money(priceNum)}</dd>
+          </div>
+          <div>
+            <dt>Next listing</dt>
+            <dd>{money(path.nicheMinPrice)}</dd>
+          </div>
+          {gap != null && (
+            <div>
+              <dt>Gap</dt>
+              <dd className={gap > 0 ? "is-up" : ""}>{gap > 0 ? `+${gap.toLocaleString()}` : gap.toLocaleString()}</dd>
+            </div>
+          )}
+          <div>
+            <dt>In niche</dt>
+            <dd>{path.totalProducts?.toLocaleString() ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Sellers</dt>
+            <dd>{path.sellerCount ?? "—"}</dd>
+          </div>
+        </dl>
+      )}
+
+      {/* ── Which path ─────────────────────────────────────────── */}
+      {hasPaths && (
+        <section className="res-paths">
+          <div className="res-paths-bar">
+            <span className="res-paths-label">
+              Path <strong>{chainPathIdx + 1}</strong> of {paths.length}
+              <span className="res-paths-steps">{steps.length} filter{steps.length !== 1 ? "s" : ""}</span>
+            </span>
+            <div className="res-paths-nav">
+              <button
+                type="button" className="res-icon-btn" aria-label="Previous path"
+                disabled={chainPathIdx === 0}
+                onClick={() => setChainPathIdx(Math.max(0, chainPathIdx - 1))}
+              >
+                <CaretLeft size={14} weight="bold" />
               </button>
+              <button
+                type="button" className="res-icon-btn" aria-label="Next path"
+                disabled={chainPathIdx >= paths.length - 1}
+                onClick={() => setChainPathIdx(Math.min(paths.length - 1, chainPathIdx + 1))}
+              >
+                <CaretRight size={14} weight="bold" />
+              </button>
+              {paths.length > 1 && (
+                <button type="button" className="res-text-btn" onClick={() => setShowAllPaths((v) => !v)}>
+                  {showAllPaths ? "Hide" : "All paths"}
+                </button>
+              )}
             </div>
           </div>
-        )}
 
-        {chainStatus === "done" && chainResults && (
-          <>
-            <div className="text-xs-subtle margin-bottom-16">
-              <Lightning size={13} weight="fill" className="inline-icon" /> Sequential Chain Elimination
-            </div>
+          {showAllPaths && (
+            <ul className="res-path-list">
+              {paths.map((p, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    className="res-path-row"
+                    aria-current={i === chainPathIdx}
+                    onClick={() => { setChainPathIdx(i); setShowAllPaths(false); }}
+                  >
+                    <span className="res-path-n">{i + 1}</span>
+                    <span className="res-path-filters">
+                      {filterLine(p.activeFilters, scrapedData?.filters)}
+                    </span>
+                    <span className="res-path-floor">{money(p.nicheMinPrice)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
-            {(() => {
-              const hasPaths = !!(chainResults.winningPaths && chainResults.winningPaths.length > 0);
-              const isWin = chainResults.status === "WIN";
-              const selectedPath = hasPaths
-                ? (chainResults.winningPaths[chainPathIdx] || chainResults.winningPaths[0])
-                : null;
+      {/* ── How it got there ───────────────────────────────────── */}
+      {steps.length > 0 && (
+        <section className="res-section">
+          <h3 className="res-section-title">Elimination steps</h3>
+          <ol className="res-steps">
+            {steps.map((step, i) => (
+              <Step key={i} step={step} index={i} isLast={i === steps.length - 1} />
+            ))}
+          </ol>
+          {path?.isUntapped && (
+            <p className="res-note">No competitors remain in this niche at all — it's untapped.</p>
+          )}
+        </section>
+      )}
 
-              const headlineTone = isWin ? "success" : hasPaths ? "amber" : "danger";
-              const HeadlineIcon = isWin ? CheckCircle : hasPaths ? Warning : XCircle;
-              const headlineText = isWin
-                ? "You can take L1 in this category."
-                : hasPaths
-                ? `Closest floor: ₹${(chainResults.bestAchievablePrice ?? 0).toLocaleString()}. Still above your ₹${priceNum.toLocaleString()}.`
-                : `No path to L1 at ₹${priceNum.toLocaleString()}. Every golden filter's been tried.`;
+      {/* ── Who you'd be up against ────────────────────────────── */}
+      {path?.competitorInsights && (path.competitorInsights.l2 || path.competitorInsights.l3) && (
+        <section className="res-section">
+          <h3 className="res-section-title">
+            Who you'd sit above
+            <span className="res-section-note">Click a listing for its live specs</span>
+          </h3>
+          <div className="res-rivals">
+            <CompetitorCard role="L2" competitor={path.competitorInsights.l2} onOpen={onFetchCompetitorSpecs} />
+            <CompetitorCard role="L3" competitor={path.competitorInsights.l3} onOpen={onFetchCompetitorSpecs} />
+          </div>
+        </section>
+      )}
 
-              return (
-                <>
-                  <div className={`chain-headline chain-headline-${headlineTone}`}>
-                    <span className="chain-headline-icon"><HeadlineIcon size={18} weight="fill" /></span>
-                    <span>{headlineText}</span>
-                  </div>
+      {/* ── When nothing clears the price ──────────────────────── */}
+      {!isWin && chainResults.bestAchievablePrice && (
+        <p className="res-advice">
+          <Lightbulb size={15} weight="fill" />
+          List below <strong>{money(chainResults.bestAchievablePrice)}</strong> to take L1 — that's the
+          highest floor these filters can reach.
+        </p>
+      )}
 
-                  {selectedPath && (
-                    <div className="chain-active-filters margin-top-12">
-                      {Object.entries(selectedPath.activeFilters || {}).map(([key, val], idx) => {
-                        const gf = scrapedData?.filters?.find(f => f.filterKey === key);
-                        return (
-                          <div key={key} className="chain-filter-chip" style={{ "--stagger-i": idx }}>
-                            {gf?.filterName || key}: <strong>{val}</strong>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+      {/* ── Leads GeM wouldn't confirm ─────────────────────────── */}
+      {unconfirmed.length > 0 && (
+        <section className="res-section">
+          <h3 className="res-section-title">
+            {unconfirmed.length} lead{unconfirmed.length !== 1 ? "s" : ""} GeM didn't confirm
+            <span className="res-section-note">Worth checking by hand</span>
+          </h3>
+          <p className="res-note">
+            GeM's search returned nothing for these combinations, most likely because its index
+            doesn't accept the literal filter text — not because the niche is empty.
+          </p>
+          <ul className="res-lead-list">
+            {unconfirmed.map((lead, i) => (
+              <li key={i} className="res-lead">
+                <span className="res-lead-filters">
+                  {filterLine(lead.activeFilters, scrapedData?.filters)}
+                </span>
+                <span className="res-lead-meta">
+                  {lead.totalProducts} local match{lead.totalProducts !== 1 ? "es" : ""}
+                  {lead.nicheMinPrice != null && ` · floor ~${money(lead.nicheMinPrice)}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
-                  {chainResults.winningPaths && chainResults.winningPaths.length > 1 && (
-                    <div className="chain-path-tabs margin-top-12">
-                      {chainResults.winningPaths.map((path, idx) => (
-                        <button
-                          key={idx}
-                          className={`chain-path-tab ${chainPathIdx === idx ? "chain-path-tab-active" : ""}`}
-                          onClick={() => setChainPathIdx(idx)}
-                        >
-                          Path {idx + 1}
-                          <span className="chain-path-badge">
-                            {path.iterations?.length ?? 0} step{(path.iterations?.length ?? 0) !== 1 ? "s" : ""}
-                          </span>
-                          {path.isUntapped && <span className="color-amber text-xs"><Star size={11} weight="fill" /></span>}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {hasPaths && (
-                    <details className="chain-detail-toggle margin-top-16">
-                      <summary className="chain-detail-summary">View elimination steps</summary>
-
-                      <div className="chain-summary margin-top-16">
-                        <div className="chain-stat chain-stat-win">
-                          <div className="chain-stat-val">{chainResults.winningPaths?.length ?? 0}</div>
-                          <div className="chain-stat-lbl">Paths Found</div>
-                        </div>
-                        <div className="chain-stat chain-stat-api">
-                          <div className="chain-stat-val">{chainResults.totalApiCalls ?? 0}</div>
-                          <div className="chain-stat-lbl">API Calls</div>
-                        </div>
-                        <div className="chain-stat">
-                          <div className="chain-stat-val">{chainResults.goldenFilterCount ?? 0}</div>
-                          <div className="chain-stat-lbl">Golden Filters</div>
-                        </div>
-                        <div className="chain-stat">
-                          <div className={chainResults.status === "WIN" ? "chain-stat-val color-success" : "chain-stat-val color-amber"}>
-                            {chainResults.status === "WIN" ? (
-                              <><CheckCircle size={16} weight="fill" className="inline-icon" /> WIN</>
-                            ) : (
-                              <><Warning size={16} weight="fill" className="inline-icon" /> PARTIAL</>
-                            )}
-                          </div>
-                          <div className="chain-stat-lbl">Status</div>
-                        </div>
-                      </div>
-
-                      {!isWin && (
-                        <div className="stuck-banner">
-                          <div className="stuck-banner-header">
-                            <div className="stuck-banner-icon"><Prohibit size={20} weight="fill" /></div>
-                            <div>
-                              <div className="stuck-banner-title">
-                                No Path to L1 at ₹{priceNum.toLocaleString()}
-                              </div>
-                              <div className="stuck-banner-desc">
-                                Every combination's been tried. None gets you under the floor.
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="stuck-stats">
-                            <div className="stuck-stat">
-                              <div className="stuck-stat-label">Your Price</div>
-                              <div className="stuck-stat-value">₹{priceNum.toLocaleString()}</div>
-                            </div>
-                            <div className="stuck-stat">
-                              <div className="stuck-stat-label">Best Achievable Floor</div>
-                              <div className="stuck-stat-value color-amber">
-                                ₹{(chainResults.bestAchievablePrice ?? 0).toLocaleString()}
-                              </div>
-                            </div>
-                            <div className="stuck-stat">
-                              <div className="stuck-stat-label">Gap (Unreachable)</div>
-                              <div className="stuck-stat-value color-danger">
-                                ₹{(priceNum - (chainResults.bestAchievablePrice ?? 0)).toLocaleString()}
-                              </div>
-                            </div>
-                          </div>
-
-                          {chainResults.bestAchievablePrice && (
-                            <div className="stuck-advice">
-                              <span><Lightbulb size={16} weight="fill" /></span>
-                              <span>
-                                List below{" "}
-                                <strong className="color-amber">
-                                  ₹{chainResults.bestAchievablePrice.toLocaleString()}
-                                </strong>{" "}
-                                to take L1. That's the lowest floor filters can reach.
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      <div className="chain-timeline">
-                        {(selectedPath?.iterations || []).map((step, idx) => (
-                          <div key={idx} className="chain-step" style={{ "--stagger-i": idx }}>
-                            <div className="chain-node chain-node-blocker">{idx + 1}</div>
-                            <div className="chain-blocker-card">
-                              <div className="chain-blocker-header">
-                                <div className="chain-blocker-tag">
-                                  <Prohibit size={13} weight="bold" className="inline-icon" /> Competitors at Floor Price
-                                </div>
-                                <div className="chain-blocker-price">₹{step.prevMinPrice?.toLocaleString()}</div>
-                              </div>
-                              <div className="chain-blocker-name">
-                                Current market minimum price
-                              </div>
-                              <div className="chain-filter-action">
-                                <div className="chain-filter-icon"><Target size={14} weight="fill" /></div>
-                                <div className="chain-filter-text">
-                                  Apply <strong>"{step.filterApplied?.filterName}"</strong> = <strong>"{step.filterApplied?.value}"</strong>
-                                </div>
-                              </div>
-                              {step.result === "LATERAL" ? (
-                                <div className="chain-new-l1-lateral">
-                                  → Pool narrowed to <strong>{step.newTotal}</strong> products
-                                  <span className="chain-badge">LATERAL</span>
-                                </div>
-                              ) : step.newMinPrice !== null && step.newMinPrice !== undefined && (
-                                <div className="chain-new-l1">
-                                  → Price floor raised to: <strong>₹{step.newMinPrice?.toLocaleString()}</strong>
-                                  <span className="chain-badge-text">
-                                    {step.newTotal} products remain
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-
-                        {selectedPath && (
-                          <div className="chain-step chain-step-final">
-                            <div className={`chain-node ${selectedPath.isUntapped ? "chain-node-untapped" : selectedPath.status === "PARTIAL" ? "chain-node-partial" : "chain-node-victory"}`}>
-                              {selectedPath.status === "PARTIAL" ? <Warning size={13} weight="bold" /> : <CheckCircle size={13} weight="bold" />}
-                            </div>
-                            <div className="chain-victory-card" data-status={selectedPath.status === "PARTIAL" ? "PARTIAL" : "WIN"}>
-                              {selectedPath.status !== "PARTIAL" && (
-                                <div className="confetti-burst">
-                                  {CONFETTI.map((c, idx) => (
-                                    <span
-                                      key={idx}
-                                      className="confetti-piece"
-                                      style={{
-                                        "--stagger-i": idx,
-                                        "--confetti-x": `${c.x}px`,
-                                        "--confetti-y": `${c.y}px`,
-                                        "--confetti-r": `${c.r}deg`,
-                                        "--confetti-color": c.color,
-                                      }}
-                                    />
-                                  ))}
-                                </div>
-                              )}
-                              <div className="chain-victory-header">
-                                <div className="chain-victory-tag">
-                                  {selectedPath.isUntapped ? (
-                                    <><Trophy size={16} weight="fill" className="inline-icon" /> Untapped Niche</>
-                                  ) : selectedPath.status === "PARTIAL" ? (
-                                    <><Warning size={16} weight="fill" className="inline-icon" /> Stuck. Can't Reach Target</>
-                                  ) : (
-                                    <><Trophy size={16} weight="fill" className="inline-icon" /> You Are L1!</>
-                                  )}
-                                </div>
-                                <div className="chain-victory-price">
-                                  {selectedPath.isUntapped
-                                    ? "No Competitors"
-                                    : `Ceiling Price: ₹${selectedPath.nicheMinPrice?.toLocaleString() ?? "?"}`}
-                                </div>
-                              </div>
-                              <div className="chain-victory-detail">
-                                {selectedPath.status === "PARTIAL" ? (
-                                  <>
-                                    <strong>{(selectedPath.iterations || []).length} elimination{(selectedPath.iterations || []).length !== 1 ? "s" : ""}</strong> in,
-                                    the highest floor reachable is <strong>₹{selectedPath.nicheMinPrice?.toLocaleString() ?? "?"}</strong>.
-                                    No filter combination clears your target of <strong>₹{priceNum.toLocaleString()}</strong>.
-                                  </>
-                                ) : (
-                                  <>
-                                    <strong>{(selectedPath.iterations || []).length} elimination{(selectedPath.iterations || []).length !== 1 ? "s" : ""}</strong> in,
-                                    your <strong>₹{priceNum.toLocaleString()}</strong> is now the cheapest.
-                                    {!selectedPath.isUntapped && selectedPath.nicheMinPrice && (
-                                      <> Gap: <strong>₹{(selectedPath.nicheMinPrice - priceNum).toLocaleString()}</strong></>
-                                    )}
-                                    {selectedPath.totalProducts > 0 && (
-                                      <> · <strong>{selectedPath.totalProducts}</strong> products in niche</>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-
-                              {selectedPath.competitorInsights && (
-                                <div className="competitor-insights-container">
-                                  <div className="competitor-insights-header">
-                                    <span className="competitor-insights-icon"><MagnifyingGlass size={16} weight="bold" /></span>
-                                    <span className="competitor-insights-title">Competitor Insights</span>
-                                  </div>
-                                  <div className="competitor-insights-msg">
-                                    {selectedPath.competitorInsights.message}
-                                  </div>
-
-                                  {(selectedPath.competitorInsights.l2 || selectedPath.competitorInsights.l3) && (
-                                    <div className="competitor-insights-grid">
-                                      {selectedPath.competitorInsights.l2 && (
-                                        <div
-                                          className="competitor-insights-card"
-                                          onClick={() => onFetchCompetitorSpecs(selectedPath.competitorInsights.l2, "L2")}
-                                        >
-                                          <div className="competitor-insights-card-header">
-                                            <span>L2 Product</span>
-                                            <span className="competitor-insights-card-hint">Click to view specs</span>
-                                          </div>
-                                          <div className="competitor-insights-card-title" title={selectedPath.competitorInsights.l2.name}>
-                                            {selectedPath.competitorInsights.l2.name}
-                                          </div>
-                                          <div className="competitor-insights-card-footer">
-                                            <span className="competitor-insights-card-brand">
-                                              {selectedPath.competitorInsights.l2.brand || "Unknown Brand"}
-                                            </span>
-                                            <span className="competitor-insights-card-price">
-                                              ₹{selectedPath.competitorInsights.l2.price.toLocaleString()}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      )}
-                                      {selectedPath.competitorInsights.l3 && (
-                                        <div
-                                          className="competitor-insights-card"
-                                          onClick={() => onFetchCompetitorSpecs(selectedPath.competitorInsights.l3, "L3")}
-                                        >
-                                          <div className="competitor-insights-card-header">
-                                            <span>L3 Product</span>
-                                            <span className="competitor-insights-card-hint">Click to view specs</span>
-                                          </div>
-                                          <div className="competitor-insights-card-title" title={selectedPath.competitorInsights.l3.name}>
-                                            {selectedPath.competitorInsights.l3.name}
-                                          </div>
-                                          <div className="competitor-insights-card-footer">
-                                            <span className="competitor-insights-card-brand">
-                                              {selectedPath.competitorInsights.l3.brand || "Unknown Brand"}
-                                            </span>
-                                            <span className="competitor-insights-card-price">
-                                              ₹{selectedPath.competitorInsights.l3.price.toLocaleString()}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </details>
-                  )}
-
-                  {/* Unconfirmed leads show alongside any result, even a confirmed win. */}
-                  {chainResults.unconfirmedPaths?.length > 0 && (
-                    <div className="unconfirmed-section margin-top-16">
-                      <div className="unconfirmed-header">
-                        <Warning size={14} weight="fill" className="inline-icon" />{" "}
-                        {chainResults.unconfirmedPaths.length} lead{chainResults.unconfirmedPaths.length !== 1 ? "s" : ""} in local data, not confirmed live
-                      </div>
-                      <div className="unconfirmed-desc">
-                        GeM's live search didn't corroborate these combinations, most likely
-                        because it doesn't recognize the literal filter text we're sending for
-                        these spec types (not because the niche doesn't exist). Worth checking
-                        manually on the actual GeM site before ruling them out.
-                      </div>
-                      {chainResults.unconfirmedPaths.map((path, idx) => (
-                        <div key={idx} className="unconfirmed-card">
-                          <div className="chain-active-filters">
-                            {Object.entries(path.activeFilters || {}).map(([key, val]) => {
-                              const gf = scrapedData?.filters?.find(f => f.filterKey === key);
-                              return (
-                                <div key={key} className="chain-filter-chip chip-item-amber">
-                                  {gf?.filterName || key}: <strong>{val}</strong>
-                                </div>
-                              );
-                            })}
-                          </div>
-                          <div className="unconfirmed-stats">
-                            Local match: <strong>{path.totalProducts}</strong> product{path.totalProducts !== 1 ? "s" : ""}
-                            {path.nicheMinPrice != null && (
-                              <> · floor ~₹{path.nicheMinPrice.toLocaleString()}</>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              );
-            })()}
-
-            <button className="chain-hunt-trigger margin-top-24" onClick={onChainHunt}>
-              <ArrowClockwise size={16} weight="bold" /> Re-run Chain Hunt
-            </button>
-          </>
-        )}
-      </div>
+      {/* ── Provenance ─────────────────────────────────────────── */}
+      <footer className="res-foot">
+        <span className="res-foot-meta">
+          {chainResults.totalPaths} path{chainResults.totalPaths !== 1 ? "s" : ""} ·{" "}
+          {chainResults.totalApiCalls} requests · {chainResults.goldenFilterCount} golden filters ·{" "}
+          {chainResults.elapsed}s · market floor {money(chainResults.marketMinPrice)}
+        </span>
+        <button type="button" className="res-text-btn" onClick={onChainHunt}>
+          <ArrowClockwise size={14} weight="bold" /> Run again
+        </button>
+      </footer>
     </div>
   );
 }
