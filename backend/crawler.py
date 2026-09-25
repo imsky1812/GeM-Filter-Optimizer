@@ -795,14 +795,18 @@ class GeMCrawler:
         filters: dict,
         location: str = "",
         seller_price: Optional[int] = None,
+        max_pages: int = 2,
     ) -> dict:
         """
         Fast price-only crawl with filters applied.
         Returns min price, total count, and seller count.
         Used by chain hunt and L1 surpasser for verification.
+
+        `max_pages=1` reads only the cheapest page: enough for GeM's exact
+        count and floor, at half the requests, for exploring many niches.
         """
         try:
-            return self._bm.run(self._crawl_filtered_prices_async(url, filters, location))
+            return self._bm.run(self._crawl_filtered_prices_async(url, filters, location, max_pages))
         except Exception as e:
             logger.error(f"[Crawler] Filtered crawl failed: {e}")
             return {"min_price": None, "total": 0, "product_count": 0, "seller_count": 0, "error": True}
@@ -840,7 +844,8 @@ class GeMCrawler:
         _baseline_cache[key] = (time.time(), total)
         return total
 
-    async def _crawl_filtered_prices_async(self, url: str, filters: dict, location: str) -> dict:
+    async def _crawl_filtered_prices_async(self, url: str, filters: dict, location: str,
+                                           max_pages: int = 2) -> dict:
         """
         Every request here goes through BrowserManager.fetch_async, which
         retries with backoff. GeM aborts a navigation now and then
@@ -913,7 +918,7 @@ class GeMCrawler:
 
         # Page 2, for better seller diversity. Optional: a failure here leaves
         # page 1's answer intact rather than sinking the verification.
-        if total > len(catalogs):
+        if max_pages > 1 and total > len(catalogs):
             try:
                 query_params["page"] = 2
                 json_text2 = _extract_json_text(

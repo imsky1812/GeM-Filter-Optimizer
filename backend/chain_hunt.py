@@ -72,6 +72,57 @@ def _stuck_result(api_calls: int, golden_filter_count: int, t_start: float, targ
     }
 
 
+# ── Competitor insights (shared by both search engines) ─────────────────────
+
+def format_competitor(p):
+    if not p:
+        return None
+    return {
+        "id": p.get("catalogue_id") or p.get("id", ""),
+        "name": p.get("name", ""),
+        "price": p.get("price", 0),
+        "searchPrice": p.get("searchPrice", p.get("price", 0)),
+        "pricePageChecked": bool(p.get("pricePageChecked")),
+        "seller": p.get("seller_name") or p.get("seller", ""),
+        "seller_id": p.get("seller_id", ""),
+        "brand": p.get("brand", ""),
+        "url": p.get("product_url") or p.get("url", ""),
+    }
+
+
+def extract_competitor_insights(matched_products, t_price):
+    if not matched_products:
+        return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
+    valid_products = sorted((p for p in matched_products if p["price"] > t_price), key=lambda x: x["price"])
+    if not valid_products:
+        return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
+
+    l2 = format_competitor(valid_products[0])
+    l2_brand = l2.get("brand", "").strip().lower()
+
+    if len(valid_products) == 1:
+        return {"message": "no L2 and L3 on this path", "l2": l2, "l3": None}
+
+    l3 = None
+    for p in valid_products[1:]:
+        p_brand = p.get("brand", "").strip().lower()
+        if p_brand != l2_brand and p_brand != "":
+            l3 = format_competitor(p)
+            break
+
+    if l3:
+        return {
+            "message": f"L2 and L3 found with their product names: {l2['name']} and {l3['name']}",
+            "l2": l2,
+            "l3": l3
+        }
+    return {
+        "message": "found L2 and L3 but of same brands",
+        "l2": l2,
+        "l3": format_competitor(valid_products[1])
+    }
+
+
 # How many of each path's cheapest listings get priced from their own page.
 LIVE_PRICE_DEPTH = 24
 
@@ -588,54 +639,6 @@ def smart_l1_discovery(self, category_url: str, target_price: int,
                         verified_paths.append((active_dict, steps_list, local_eval, live_res))
                 except Exception as e:
                     logger.error(f"[IMCDS] Verification failed: {e}")
-
-    # Competitor insights helper
-    def format_competitor(p):
-        if not p:
-            return None
-        return {
-            "id": p.get("catalogue_id") or p.get("id", ""),
-            "name": p.get("name", ""),
-            "price": p.get("price", 0),
-            "searchPrice": p.get("searchPrice", p.get("price", 0)),
-            "pricePageChecked": bool(p.get("pricePageChecked")),
-            "seller": p.get("seller_name") or p.get("seller", ""),
-            "seller_id": p.get("seller_id", ""),
-            "brand": p.get("brand", ""),
-            "url": p.get("product_url") or p.get("url", ""),
-        }
-
-    def extract_competitor_insights(matched_products, t_price):
-        if not matched_products:
-            return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
-        valid_products = sorted((p for p in matched_products if p["price"] > t_price), key=lambda x: x["price"])
-        if not valid_products:
-            return {"message": "no L2 and L3 on this path", "l2": None, "l3": None}
-
-        l2 = format_competitor(valid_products[0])
-        l2_brand = l2.get("brand", "").strip().lower()
-
-        if len(valid_products) == 1:
-            return {"message": "no L2 and L3 on this path", "l2": l2, "l3": None}
-
-        l3 = None
-        for p in valid_products[1:]:
-            p_brand = p.get("brand", "").strip().lower()
-            if p_brand != l2_brand and p_brand != "":
-                l3 = format_competitor(p)
-                break
-
-        if l3:
-            return {
-                "message": f"L2 and L3 found with their product names: {l2['name']} and {l3['name']}",
-                "l2": l2,
-                "l3": l3
-            }
-        return {
-            "message": "found L2 and L3 but of same brands",
-            "l2": l2,
-            "l3": format_competitor(valid_products[1])
-        }
 
     def build_iterations(steps_list, can_win=False):
         """

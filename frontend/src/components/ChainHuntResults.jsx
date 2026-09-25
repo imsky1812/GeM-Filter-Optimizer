@@ -121,9 +121,9 @@ export default function ChainHuntResults({
           </div>
           <div className="chain-loading-bar"><div className="chain-loading-fill" /></div>
           <ol className="run-phases">
-            <li className="run-phase is-on"><span className="tag">scan</span><span className="txt">Indexing products and golden filters</span></li>
-            <li className="run-phase is-on"><span className="tag">hunt</span><span className="txt">Combining filters up to four deep, in memory</span></li>
-            <li className="run-phase is-on"><span className="tag">verify</span><span className="txt">Re-checking the best candidates against GeM live</span></li>
+            <li className="run-phase is-on"><span className="tag">scan</span><span className="txt">Reading the category and its golden filters</span></li>
+            <li className="run-phase is-on"><span className="tag">hunt</span><span className="txt">Asking GeM to count every filter combination, up to four deep</span></li>
+            <li className="run-phase is-on"><span className="tag">verify</span><span className="txt">Pricing the deciding listings from their product pages</span></li>
             <li className="run-phase"><span className="tag">result</span><span className="txt">Ranking the paths that clear your price</span></li>
           </ol>
         </div>
@@ -170,6 +170,9 @@ export default function ChainHuntResults({
 
   const paths = chainResults.winningPaths || [];
   const unconfirmed = chainResults.unconfirmedPaths || [];
+  const unrecognized = chainResults.unrecognizedValues || [];
+  // Only worth flagging when the known values clearly miss part of the category.
+  const gaps = (chainResults.filterCoverage || []).filter((c) => c.share < 0.9);
   const hasPaths = paths.length > 0;
   const isWin = chainResults.status === "WIN";
   const path = hasPaths ? paths[chainPathIdx] || paths[0] : null;
@@ -290,8 +293,8 @@ export default function ChainHuntResults({
           <h3 className="res-section-title">
             Elimination steps
             <span className="res-section-note">
-              Counted against the {chainResults.sampleSize?.toLocaleString() ?? "scanned"} products
-              scanned — the figures above are GeM-verified live
+              GeM's own counts across all {chainResults.searchedListings?.toLocaleString() ?? ""} listings,
+              at search-index prices; the verdict above is priced from product pages
             </span>
           </h3>
           <ol className="res-steps">
@@ -357,10 +360,34 @@ export default function ChainHuntResults({
         </section>
       )}
 
+      {/* ── What the search couldn't see ─────────────────────── */}
+      {(gaps.length > 0 || unrecognized.length > 0) && (
+        <section className="res-section">
+          <h3 className="res-section-title">
+            Limits of this search
+            <span className="res-section-note">Niches it could not measure</span>
+          </h3>
+          {gaps.length > 0 && (
+            <p className="res-note">
+              Some filters have values the category scan never saw, so niches built on them weren't
+              tried: {gaps.map((g) => `${shortName(g.filterName)} (known values cover ${Math.round(g.share * 100)}% of listings)`).join("; ")}.
+            </p>
+          )}
+          {unrecognized.length > 0 && (
+            <p className="res-note">
+              GeM's search returns nothing for {unrecognized.length} filter value
+              {unrecognized.length !== 1 ? "s" : ""} even though listings carry them, so niches using them
+              can't be checked: {unrecognized.map((u) => `${shortName(u.filterName)}: ${u.value}`).join("; ")}.
+            </p>
+          )}
+        </section>
+      )}
+
       {/* ── Provenance ─────────────────────────────────────────── */}
       <footer className="res-foot">
         <span className="res-foot-meta">
           {chainResults.totalPaths} path{chainResults.totalPaths !== 1 ? "s" : ""} ·{" "}
+          {chainResults.nicheQueries != null && <>{chainResults.nicheQueries} niches measured · </>}
           {chainResults.totalApiCalls} requests · {chainResults.goldenFilterCount} golden filters ·{" "}
           {chainResults.elapsed}s · market floor {money(chainResults.marketMinPrice)}
         </span>

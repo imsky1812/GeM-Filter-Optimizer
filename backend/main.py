@@ -246,8 +246,8 @@ def clear_cache():
 @api_router.post("/chain-hunt")
 def chain_hunt(req: ChainHuntRequest):
     """
-    Sequential L1 Chain Surpasser (now powered by Playwright crawler).
-    Uses the new GeMCrawler for live verification of filter paths.
+    Find the golden-filter combinations that make the seller L1 at their price,
+    measured by GeM's own filtering across the whole category.
     """
     if req.target_price <= 0:
         raise HTTPException(status_code=400, detail="target_price must be > 0.")
@@ -262,12 +262,11 @@ def chain_hunt(req: ChainHuntRequest):
         )
 
     try:
-        # Use the existing chain_hunt logic via scraper (which now delegates to crawler)
-        from scraper import GeMScraper
-        scraper = GeMScraper()
+        # GeM filters the whole category for us; see niche_search.py.
+        from niche_search import find_l1_niches
         excluded = set(req.excluded_filter_keys or [])
         excluded.add("mse_applicable")
-        result = scraper.smart_l1_discovery(
+        result = find_l1_niches(
             category_url=category_url,
             target_price=req.target_price,
             golden_filters=golden,
