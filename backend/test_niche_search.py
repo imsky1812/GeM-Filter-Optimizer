@@ -69,10 +69,12 @@ class FakeGeM:
         return {u: {"price": by_url[u]["page"], "specs": dict(by_url[u]["specs"])} for u in urls}
 
 
-def run(catalog, target, golden):
+def run(catalog, target, golden, fresh=True):
     FakeGeM.CATALOG = catalog
     FakeGeM.queries = []
     FakeGeM.pages_read = []
+    if fresh:
+        niche_search.clear_caches()
     return niche_search.find_l1_niches("https://mkp.gem.gov.in/x/search", target, golden)
 
 
@@ -82,7 +84,7 @@ def golden(key, *values):
 
 
 crawler.GeMCrawler = FakeGeM
-niche_search._discover_values = lambda *a, **k: {}
+niche_search._discover_values = lambda *a, **k: ({}, {})
 
 # ── 1. A win that only exists as a combination ───────────────────────────────
 print("\nA combination wins where neither filter wins alone")
@@ -183,6 +185,24 @@ for p in res["winningPaths"]:
         pc = p["priceCheck"] or {}
         check(f"{p['activeFilters']} fully page-checked",
               pc.get("checked") == pc.get("fetched") and pc.get("checked", 0) > 0, pc)
+
+# ── 9. A second price reuses what GeM already answered ───────────────────────
+print("\nTrying another price in the same category reuses GeM's answers")
+first = run(cat, 200, [golden("colour", "red", "blue"), golden("size", "L", "M")])
+asked_first, read_first = len(FakeGeM.queries), len(FakeGeM.pages_read)
+second = run(cat, 250, [golden("colour", "red", "blue"), golden("size", "L", "M")], fresh=False)
+check("first run asked GeM", asked_first > 0 and read_first > 0, (asked_first, read_first))
+check("second run asked GeM (almost) nothing new",
+      len(FakeGeM.queries) <= 1, FakeGeM.queries)
+check("and re-read no product pages", len(FakeGeM.pages_read) == 0, FakeGeM.pages_read)
+check("the answer is still right at the new price",
+      any(p["activeFilters"] == {"colour": "red", "size": "M"} and p["status"] == "WIN"
+          for p in second["winningPaths"]),
+      [(p["activeFilters"], p["status"]) for p in second["winningPaths"]])
+check("reported floors are page prices, not a cached annotation leaking",
+      all(p["nicheMinPrice"] == q["nicheMinPrice"]
+          for p in second["winningPaths"] for q in first["winningPaths"]
+          if p["activeFilters"] == q["activeFilters"]))
 
 print(f"\n{'=' * 60}\n{passed} passed, {failed} failed\n{'=' * 60}")
 sys.exit(1 if failed else 0)

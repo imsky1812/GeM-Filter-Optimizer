@@ -26,9 +26,11 @@ GeM applying the filter to every listing's specs. So:
 4. Finalists are priced from product pages before any verdict, because GeM's
    search index lags behind price cuts (see chain_hunt._reprice_from_pages).
 """
+import copy
 import heapq
 import itertools
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -39,9 +41,7 @@ from chain_hunt import (
     extract_competitor_insights,
 )
 from gem_utils import (
-    HTML_PARSER,
     build_product_url,
-    extract_specs_from_soup,
     make_name_resolver,
     query_values_for,
 )
@@ -61,6 +61,66 @@ ROUND_BUDGET_SHARE = (0.4, 0.6, 0.8, 1.0)
 VERIFY_PER_ROUND = 10
 PROBE_NEAR_MISSES = 4
 PROBE_BLOCKERS = 6
+# Neither GeM's count for a niche nor a listing's product page depends on the
+# seller's target price, so both are kept briefly across runs: trying a
+# second price, or re-running a category, reuses nearly everything. Short
+# lifetimes keep prices fresh -- they change, which is the whole problem.
+NICHE_CACHE_TTL = 10 * 60
+PAGE_CACHE_TTL = 20 * 60
+_CACHE_MAX = 20000
+_niche_cache = {}     # (category, location, filters) -> (time, result)
+_page_cache = {}      # listing url -> (time, {"price", "specs"})
+_cache_lock = threading.Lock()
+
+
+def clear_caches():
+    with _cache_lock:
+        _niche_cache.clear()
+        _page_cache.clear()
+
+
+def _cache_get(cache, key, ttl):
+    with _cache_lock:
+        hit = cache.get(key)
+        if hit and time.time() - hit[0] < ttl:
+            # Callers annotate results (page prices, checks); never hand
+            # out the stored object itself.
+            return copy.deepcopy(hit[1])
+        cache.pop(key, None)
+        return None
+
+
+def _cache_put(cache, key, value):
+    with _cache_lock:
+        if len(cache) >= _CACHE_MAX:
+            for k in sorted(cache, key=lambda k: cache[k][0])[:_CACHE_MAX // 10]:
+                del cache[k]
+        cache[key] = (time.time(), copy.deepcopy(value))
+
+
+def read_pages(crawler, urls):
+    """
+    Product pages for `urls` as {url: {"price", "specs"}} -- from the cache
+    where fresh, from GeM otherwise. Returns (pages, how many were fetched).
+    """
+    out, todo = {}, []
+    for u in dict.fromkeys(urls):
+        if not u:
+            continue
+        hit = _cache_get(_page_cache, u, PAGE_CACHE_TTL)
+        if hit is None:
+            todo.append(u)
+        else:
+            out[u] = hit
+    if todo:
+        for u, info in crawler.live_pages(todo).items():
+            out[u] = info
+            # An unreadable page isn't an answer; let the next run retry it.
+            if info.get("price") is not None:
+                _cache_put(_page_cache, u, info)
+    return out, len(todo)
+
+
 # Product pages read to learn filter values the category scan didn't see.
 DISCOVERY_PAGES = 24
 
@@ -77,7 +137,6 @@ def _discover_values(crawler, category_url: str, location: str, filter_meta: dic
     """
     import json
     from urllib.parse import urlencode
-    from bs4 import BeautifulSoup
     from crawler import _extract_json_text
 
     base_url = crawler._normalize_url(category_url)[0]
@@ -103,14 +162,15 @@ def _discover_values(crawler, category_url: str, location: str, filter_meta: dic
     resolve = make_name_resolver([m["name"] for m in filter_meta.values()])
     key_for = {m["name"]: k for k, m in filter_meta.items()}
     found = {k: set() for k in filter_meta}
-    for html in crawler._bm.fetch_many(picked, timeout=20000, retries=2, concurrency=4):
-        if not html or "default_variant_id" not in html:
-            continue
-        for spec_name, value in extract_specs_from_soup(BeautifulSoup(html, HTML_PARSER)).items():
+    # Through the page cache: the prices these pages carry are as useful to
+    # the search as their specs are to discovery.
+    pages, _ = read_pages(crawler, picked)
+    for info in pages.values():
+        for spec_name, value in (info.get("specs") or {}).items():
             name = resolve(spec_name)
             if name and value and len(value) <= 150:
                 found[key_for[name]].add(value.strip())
-    return found
+    return found, pages
 
 
 def find_l1_niches(category_url: str, target_price: int, golden_filters: list,
@@ -126,10 +186,23 @@ def find_l1_niches(category_url: str, target_price: int, golden_filters: list,
     start_filters = {mf["filterKey"]: mf["value"] for mf in (mandatory_filters or [])
                      if mf.get("filterKey") and mf.get("value")}
 
+    cache_hits = [0]
+
     def query(filters: dict, pages: int = 1) -> dict:
+        full = {**start_filters, **filters}
+        key = (crawler._normalize_url(category_url)[0], (location or "").lower(),
+               frozenset(full.items()))
+        hit = _cache_get(_niche_cache, key, NICHE_CACHE_TTL)
+        # A two-page answer also serves a one-page question, not the reverse.
+        if hit is not None and (pages == 1 or hit.get("_pages", 1) >= pages):
+            cache_hits[0] += 1
+            return hit
         calls[0] += 1
-        return crawler.crawl_filtered_prices(category_url, {**start_filters, **filters},
-                                             location, max_pages=pages)
+        res = crawler.crawl_filtered_prices(category_url, full, location, max_pages=pages)
+        if not res.get("error"):
+            res["_pages"] = pages
+            _cache_put(_niche_cache, key, res)
+        return res
 
     # ── The category itself ──────────────────────────────────────────────
     base = query({})
@@ -158,7 +231,9 @@ def find_l1_niches(category_url: str, target_price: int, golden_filters: list,
         filter_meta[key] = {"name": f.get("filterName", key), "type": f.get("type", ""),
                             "values": list(f.get("values", []))}
 
-    discovered = _discover_values(crawler, category_url, location, filter_meta) if filter_meta else {}
+    discovered, discovery_pages = ({}, {})
+    if filter_meta:
+        discovered, discovery_pages = _discover_values(crawler, category_url, location, filter_meta)
     calls[0] += 5 + DISCOVERY_PAGES
     learned = 0
     for key, meta in filter_meta.items():
@@ -227,18 +302,25 @@ def find_l1_niches(category_url: str, target_price: int, golden_filters: list,
     key_for = {m["name"]: k for k, m in filter_meta.items()}
     page_info = {}        # url -> {"price": int|None, "specs": {filterKey: value}}
 
-    def page_check(urls):
-        todo = [u for u in dict.fromkeys(urls) if u and u not in page_info]
-        if not todo:
-            return
-        for u, info in crawler.live_pages(todo).items():
+    def remember(pages):
+        for u, info in pages.items():
             specs = {}
             for name, value in (info.get("specs") or {}).items():
                 resolved = resolve_spec(name)
                 if resolved and value:
                     specs[key_for[resolved]] = value.strip().lower()
             page_info[u] = {"price": info.get("price"), "specs": specs}
-        calls[0] += len(todo)
+
+    def page_check(urls):
+        todo = [u for u in dict.fromkeys(urls) if u and u not in page_info]
+        if not todo:
+            return
+        pages, fetched = read_pages(crawler, todo)
+        remember(pages)
+        calls[0] += fetched
+
+    # The pages discovery read are already priced; don't read them twice.
+    remember(discovery_pages)
 
     def listings(state):
         return sorted(stats[state].get("products") or [], key=lambda p: p["price"])
@@ -474,6 +556,7 @@ def find_l1_niches(category_url: str, target_price: int, golden_filters: list,
         "ignoredFilterKeys": sorted(ignored_keys),
         "filterCoverage": coverage,
         "valuesLearned": learned,
+        "cacheHits": cache_hits[0],
         "budgetExhausted": budget_exhausted,
         "unexploredCombinations": len(frontier) if budget_exhausted else 0,
         "verifiedWins": sum(1 for s in stats if real_win(s)),
