@@ -14,7 +14,22 @@ import ToolChoice from "./components/ToolChoice.jsx";
 import Landing from "./components/Landing.jsx";
 import usePointerSpotlight from "./usePointerSpotlight.js";
 
-const BACKEND_URL = "/api";
+// Same-origin "/api" when the backend serves this app; the backend's own
+// origin (set at build time) when the frontend is hosted separately.
+const BACKEND_URL = `${(import.meta.env.VITE_API_ORIGIN || "").replace(/\/+$/, "")}/api`;
+
+// A chain hunt takes minutes. Started as a job and polled, it can't be cut
+// off by a proxy timing out one long request.
+const JOB_POLL_MS = 3000;
+
+const sleep = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
 
 // Error bodies aren't always JSON (e.g. a proxy's HTML 502 page), so fall
 // back to the status code instead of surfacing a JSON parse error.
@@ -257,7 +272,7 @@ export default function App() {
     setChainPathIdx(0);
 
     try {
-      const res = await fetch(`${BACKEND_URL}/chain-hunt`, {
+      const res = await fetch(`${BACKEND_URL}/chain-hunt/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -271,9 +286,36 @@ export default function App() {
         signal,
       });
       if (!res.ok) throw new Error(await readError(res, "Chain hunt failed"));
-      const data = await res.json();
-      setChainResults(data);
-      setChainStatus("done");
+      const { jobId } = await res.json();
+
+      // Poll until the search finishes. A dropped poll is retried rather than
+      // failing a search that is still running on the server.
+      let misses = 0;
+      for (;;) {
+        await sleep(JOB_POLL_MS, signal);
+        let job;
+        try {
+          const poll = await fetch(`${BACKEND_URL}/chain-hunt/jobs/${jobId}`, { signal });
+          if (poll.status === 404) {
+            // The server no longer knows this search (restarted, or expired): retrying won't help.
+            const gone = new Error(await readError(poll, "The search was lost"));
+            gone.final = true;
+            throw gone;
+          }
+          if (!poll.ok) throw new Error(await readError(poll, "Chain hunt failed"));
+          job = await poll.json();
+          misses = 0;
+        } catch (err) {
+          if (err.name === "AbortError" || err.final || ++misses >= 5) throw err;
+          continue;
+        }
+        if (job.status === "done") {
+          setChainResults(job.result);
+          setChainStatus("done");
+          return;
+        }
+        if (job.status === "error") throw new Error(job.error || "Chain hunt failed");
+      }
     } catch (e) {
       if (e.name === "AbortError") return;
       setChainError(e.message || "Chain hunt failed");

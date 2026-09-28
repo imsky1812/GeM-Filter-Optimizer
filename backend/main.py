@@ -14,6 +14,8 @@ from typing import Optional
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 import hashlib
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 import logging
@@ -243,12 +245,8 @@ def clear_cache():
 
 # ── Smart L1 Chain Hunt ───────────────────────────────────────────────────────
 
-@api_router.post("/chain-hunt")
-def chain_hunt(req: ChainHuntRequest):
-    """
-    Find the golden-filter combinations that make the seller L1 at their price,
-    measured by GeM's own filtering across the whole category.
-    """
+def _run_chain_hunt(req: "ChainHuntRequest") -> dict:
+    """Validate a chain-hunt request and run the niche search. Raises HTTPException."""
     if req.target_price <= 0:
         raise HTTPException(status_code=400, detail="target_price must be > 0.")
 
@@ -261,23 +259,104 @@ def chain_hunt(req: ChainHuntRequest):
             detail="No golden filters provided. Run category scrape first."
         )
 
+    # GeM filters the whole category for us; see niche_search.py.
+    from niche_search import find_l1_niches
+    excluded = set(req.excluded_filter_keys or [])
+    excluded.add("mse_applicable")
+    return find_l1_niches(
+        category_url=category_url,
+        target_price=req.target_price,
+        golden_filters=golden,
+        location=req.location or "",
+        excluded_filter_keys=list(excluded),
+        mandatory_filters=req.mandatory_filters or [],
+    )
+
+
+@api_router.post("/chain-hunt")
+def chain_hunt(req: ChainHuntRequest):
+    """
+    Find the golden-filter combinations that make the seller L1 at their price,
+    measured by GeM's own filtering across the whole category.
+
+    Holds the connection for the whole search (minutes). Hosted deployments
+    should use /chain-hunt/jobs instead, which proxies can't time out.
+    """
     try:
-        # GeM filters the whole category for us; see niche_search.py.
-        from niche_search import find_l1_niches
-        excluded = set(req.excluded_filter_keys or [])
-        excluded.add("mse_applicable")
-        result = find_l1_niches(
-            category_url=category_url,
-            target_price=req.target_price,
-            golden_filters=golden,
-            location=req.location or "",
-            excluded_filter_keys=list(excluded),
-            mandatory_filters=req.mandatory_filters or [],
-        )
-        return result
+        return _run_chain_hunt(req)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Chain hunt failed: {e}")
         raise HTTPException(status_code=500, detail=f"Chain hunt failed: {str(e)}")
+
+
+# ── Chain hunt as a background job ───────────────────────────────────────────
+#
+# A search takes minutes. Held open as one HTTP request, it dies at whichever
+# proxy between the browser and this server has the shortest idle timeout.
+# So a search can run as a job: start it, then poll for the result.
+
+JOB_TTL = 60 * 60
+_jobs = {}
+_jobs_lock = threading.Lock()
+# Searches share one browser; two at a time keeps GeM from throttling us.
+_job_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="chain-hunt")
+
+
+def _prune_jobs():
+    cutoff = time.time() - JOB_TTL
+    with _jobs_lock:
+        for job_id in [j for j, v in _jobs.items() if v["created"] < cutoff]:
+            del _jobs[job_id]
+
+
+def _job_worker(job_id: str, req: "ChainHuntRequest"):
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+    try:
+        result = _run_chain_hunt(req)
+        update = {"status": "done", "result": result}
+    except HTTPException as e:
+        update = {"status": "error", "error": e.detail, "code": e.status_code}
+    except Exception as e:
+        logger.error(f"Chain hunt job {job_id} failed: {e}")
+        update = {"status": "error", "error": f"Chain hunt failed: {e}", "code": 500}
+    with _jobs_lock:
+        _jobs[job_id].update(update, finished=time.time())
+
+
+@api_router.post("/chain-hunt/jobs", status_code=202)
+def start_chain_hunt(req: ChainHuntRequest):
+    # Reject bad input now, not minutes later from inside the job.
+    if req.target_price <= 0:
+        raise HTTPException(status_code=400, detail="target_price must be > 0.")
+    _require_gem_url(req.category_url, "category_url")
+    if not req.golden_filters:
+        raise HTTPException(status_code=422, detail="No golden filters provided. Run category scrape first.")
+
+    _prune_jobs()
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "created": time.time()}
+    _job_pool.submit(_job_worker, job_id, req)
+    return {"jobId": job_id, "status": "queued"}
+
+
+@api_router.get("/chain-hunt/jobs/{job_id}")
+def chain_hunt_job(job_id: str):
+    with _jobs_lock:
+        job = dict(_jobs.get(job_id) or {})
+    if not job:
+        raise HTTPException(status_code=404, detail="No such search -- it may have expired or the server restarted.")
+    out = {"jobId": job_id, "status": job["status"],
+           "elapsed": round((job.get("finished") or time.time()) - job["created"], 1)}
+    if job["status"] == "done":
+        out["result"] = job["result"]
+    elif job["status"] == "error":
+        out["error"] = job["error"]
+        out["code"] = job.get("code", 500)
+    return out
 
 
 # ── Product Specifications ───────────────────────────────────────────────────
