@@ -13,7 +13,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY *.py ./
 
+# Some hosts (Hugging Face Spaces) run the container as uid 1000 rather than
+# root; Chromium needs a home directory it can write to either way.
+RUN mkdir -p /home/app && chown 1000:1000 /home/app
+USER 1000
+
 ENV PYTHONUNBUFFERED=1 \
+    HOME=/home/app \
     PORT=8000
 
 EXPOSE 8000

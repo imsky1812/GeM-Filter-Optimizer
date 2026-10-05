@@ -37,3 +37,6 @@ npm-debug.log*
 scratch.*
 gem_data.json
 script.txt
+
+# Generated on the server by deploy/oracle/setup.sh
+deploy/oracle/.env

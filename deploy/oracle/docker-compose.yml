@@ -1,0 +1,31 @@
+# Backend API behind Caddy, which gets and renews an HTTPS certificate on its
+# own. The frontend (Vercel) is HTTPS, and browsers won't let an HTTPS page
+# call a plain-HTTP API.
+services:
+  api:
+    build: ../../backend
+    restart: unless-stopped
+    environment:
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+    # Chromium keeps tab contents in shared memory; Docker's 64 MB default
+    # crashes tabs under load.
+    shm_size: "1gb"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  caddy_data:
+  caddy_config:
